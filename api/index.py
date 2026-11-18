@@ -83,11 +83,13 @@ def app(env, start):
         if path == '/me':
             if not u: return send('401 Unauthorized', {'error': 'signin', 'configured': auth.configured()})
             return send('200 OK', {'name': u.get('name'), 'email': u.get('email'), 'pic': u.get('pic', '')})
+        anon_import = False
         if not u and path.startswith('/import/'):
-            # one-time import without signing in: only while IMPORT_TOKEN is set in Vercel (remove it afterwards)
-            import hmac
-            tok = os.environ.get('IMPORT_TOKEN', '')
-            if len(tok) >= 24 and hmac.compare_digest(env.get('HTTP_X_IMPORT_TOKEN', ''), tok): u = {'name': 'import'}
+            # first move of the desktop data without signing in: only before IMPORT_OPEN_UNTIL (epoch seconds) and only
+            # into an empty Curio (begin refuses when data is already there) — remove the variable afterwards
+            try: until = float(os.environ.get('IMPORT_OPEN_UNTIL') or 0)
+            except ValueError: until = 0
+            if time.time() < until: u = {'name': 'import'}; anon_import = True
         if not u: return send('401 Unauthorized', {'error': 'Please sign in again.', 'signin': True})
         if r.method != 'POST': return send('405 Method Not Allowed', {'error': 'POST only'})
         if env.get('HTTP_X_CURIO') != '1': return send('403 Forbidden', {'error': 'bad request'})        # only Curio's own pages call these
@@ -104,7 +106,7 @@ def app(env, start):
             return send('200 OK', pages.rpc(b.get('o'), b.get('m'), b.get('a') or []), 'application/json; charset=utf-8')
         if path.startswith('/import/'):
             import importer
-            return send('200 OK', importer.handle(path[8:], r.json()))
+            return send('200 OK', importer.handle(path[8:], r.json(), only_if_empty=anon_import))
         return send('404 Not Found', {'error': 'not found'})
     except Exception as e:
         traceback.print_exc()

@@ -18,10 +18,15 @@ def _bump(name):
                       ('INSERT INTO _rev (name, rev) VALUES (?, 1) ON CONFLICT(name) DO UPDATE SET rev = rev + 1', (name,))])
 
 
-def handle(step, b):
+def handle(step, b, only_if_empty=False):
     r = tdb.remote()
     if step == 'begin':
         tables, book = DOMAINS[b['domain']]
+        if only_if_empty:
+            probe = 'accounts' if b['domain'] == 'finance' else 'docs'
+            try: n = r.run([(f'SELECT COUNT(*) FROM "{probe}"', ())])[0].rows[0][0]
+            except Exception: n = 0
+            if n: return {'error': 'There is already data here — sign in to replace it.'}
         schema = [s for s in b.get('schema') or [] if s.get('sql') and s.get('tbl_name', s.get('name')) in tables]
         if not any(s['type'] == 'table' for s in schema): return {'error': 'This file does not look like a Curio ' + b['domain'] + ' database.'}
         stmts = [('PRAGMA foreign_keys = OFF', ())] + [(f'DROP TABLE IF EXISTS "{t}"', ()) for t in reversed(tables)]

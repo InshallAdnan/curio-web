@@ -3,8 +3,7 @@
 <link rel="stylesheet" href="/app.css"></head>
 <body><div class="page"><div class="card">
 <h3>Import desktop data (one-time link)</h3>
-<p>Works only while an import token is set on the server.</p>
-<div class="drop" style="margin-top:12px"><label class="muted">Token</label><input id="tok" type="password" class="inp" style="flex:1"></div>
+<p>Works only for a few minutes after it is opened on the server, and only into an empty Curio.</p>
 <div class="drop" style="margin-top:8px"><label class="muted">finance.db</label><input id="fin" type="file"></div>
 <div class="drop" style="margin-top:8px"><label class="muted">pages.db</label><input id="pg" type="file"></div>
 <div class="row" style="margin-top:14px"><button class="btn primary" id="go">Import</button></div>
@@ -14,7 +13,7 @@
 <script>
 const TABLES={finance:['settings','accounts','categories','transactions','transfers','goals','goal_contributions','subscriptions','sub_periods','sub_charges','assets','asset_events','rates','rate_history'],pages:['docs','dbs','page_meta','page_comments']};
 const log=t=>{document.getElementById('log').textContent+=t+'\n'};
-async function post(url,body){const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json','X-Curio':'1','X-Import-Token':document.getElementById('tok').value},body:JSON.stringify(body)});const j=await r.json();if(j.error)throw new Error(j.error);return j}
+async function post(url,body){const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json','X-Curio':'1'},body:JSON.stringify(body)});const j=await r.json();if(j.error)throw new Error(j.error);return j}
 async function imp(SQL,file,domain){
   const db=new SQL.Database(new Uint8Array(await file.arrayBuffer()));const want=TABLES[domain];
   const q=s=>{const r=db.exec(s);return r.length?r[0]:{columns:[],values:[]}};
