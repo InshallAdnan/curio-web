@@ -59,6 +59,7 @@ a { color: inherit; }
 .btn.ghost { border-color: transparent; background: none; color: var(--muted); }
 .btn.danger { color: var(--expense); }
 .btn[disabled] { opacity: .5; pointer-events: none; }
+.btn svg, .soonbox .row svg { width: 16px; height: 16px; flex: none; }
 .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .hero { position: relative; overflow: hidden; border-radius: 18px; padding: 28px; color: #fff; margin-bottom: 18px;
   background: radial-gradient(120% 140% at 0% 0%, #ff8a5c 0%, #f2602d 45%, #c7411b 100%); }
