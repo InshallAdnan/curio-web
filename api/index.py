@@ -99,6 +99,11 @@ def app(env, start):
             b = r.json()
             try: return send('200 OK', {'ok': True, 'data': fin.call(b.get('op'), b.get('args') or {})})
             except (ValueError, KeyError, tdb.Conflict) as e: return send('200 OK', {'error': str(e) if not isinstance(e, KeyError) else f'Missing: {e}'})
+        if path == '/cal':
+            import cal
+            b = r.json()
+            try: return send('200 OK', {'ok': True, 'data': cal.call(b.get('op'), b.get('args') or {})})
+            except (ValueError, KeyError, tdb.Conflict) as e: return send('200 OK', {'error': str(e) if not isinstance(e, KeyError) else f'Missing: {e}'})
         if path == '/pages/rpc':
             import pages
             pages.USER['name'] = u.get('name') or 'You'

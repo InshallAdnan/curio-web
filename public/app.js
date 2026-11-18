@@ -37,7 +37,7 @@
     s.setAttribute('stroke-width', '1.8'); s.setAttribute('stroke-linecap', 'round'); s.setAttribute('stroke-linejoin', 'round'); const p = document.createElementNS('http://www.w3.org/2000/svg', 'path'); p.setAttribute('d', P[n] || ''); s.append(p); return s; };
 
   // ── what is in the sidebar ──
-  const LIVE = { home: 1, pages: 1, finance: 1, settings: 1 };
+  const LIVE = { home: 1, pages: 1, finance: 1, calendar: 1, settings: 1 };
   const NAV = [
     [null, [['home', 'Home', 'home'], ['explore', 'Explore', 'explore']]],
     ['Library', [['moodboard', 'Moodboard', 'grid'], ['boards', 'My Boards', 'bookmark'], ['bookmarks', 'Bookmarks', 'globe'], ['insights', 'Insights', 'chart'], ['rediscover', 'Rediscover', 'spark']]],
@@ -80,6 +80,7 @@
     let v;
     if (k === 'pages') v = frame('pages', '/pages/index.html?theme=' + theme() + '#/documents');
     else if (k === 'finance') v = frame('finance', '/finance/index.html?theme=' + theme());
+    else if (k === 'calendar') v = frame('calendar', '/calendar/index.html?theme=' + theme());
     else if (k === 'home') { v = view('home', () => {}); renderHome(v); }
     else if (k === 'settings') { v = view('settings', () => {}); renderSettings(v); }
     else { v = view('soon-' + k, (el) => renderSoon(el, k)); }
@@ -144,7 +145,18 @@
   // ── Settings + import ──
   function renderSettings(v) {
     v.replaceChildren(h('div', { class: 'page fade' }, h('h1', {}, 'Settings'), h('p', { class: 'sub' }, 'Curio on the web — your Pages and Finance, from any device.'),
-      h('div', { class: 'grid', style: 'grid-template-columns:1fr' }, importCard(), themeCard(), accountCard())));
+      h('div', { class: 'grid', style: 'grid-template-columns:1fr' }, storageCard(), importCard(), themeCard(), accountCard())));
+  }
+  function storageCard() {
+    const st = h('span', { class: 'pill' }, 'checking…');
+    fetch('/api/health').then(r => r.json()).then(j => { st.textContent = j.db === 'turso' ? 'Connected' : 'Not connected'; st.className = 'pill ' + (j.db === 'turso' ? 'ok' : 'warn'); }).catch(() => {});
+    return h('div', { class: 'card' }, h('div', { class: 'row' }, h('h3', { style: 'margin:0' }, 'Where your data is saved'), st),
+      h('p', { style: 'margin-top:8px' }, 'Everything you do here — Pages (pages, databases, rows, comments, version history, pictures), Finance (accounts, transactions, transfers, goals, subscriptions, assets, settings) and Calendar (which calendars are shown, colours) — is saved the moment you make the change, in your own database:'),
+      h('div', { class: 'links', style: 'margin-top:10px' },
+        h('div', {}, h('b', {}, 'Turso database'), h('span', { class: 'muted' }, ' — SQLite in the cloud, region Mumbai, free plan (5 GB). Connected to your Vercel project “curio-web”.')),
+        h('div', {}, h('b', {}, 'Vercel'), h('span', { class: 'muted' }, ' — runs the app; it keeps no data itself.')),
+        h('div', {}, h('b', {}, 'Google'), h('span', { class: 'muted' }, ' — only checks it is you when you sign in.'))),
+      h('p', { class: 'faint', style: 'margin-top:10px' }, 'Backups: Finance › Settings › Download finance.db (opens in the desktop app) or CSV · Pages › ⋯ › Import & export. The desktop app keeps its own data on your PC, separate from this.'));
   }
   function themeCard() {
     const cur = localStorage.getItem('curio-theme') || 'system';
@@ -193,7 +205,7 @@
     return h('div', { class: 'card' }, h('h3', {}, 'Bring your desktop data in (once)'),
       h('p', {}, 'Your files are read here in the browser and sent straight to your own database — nobody else sees them.'),
       h('div', { class: 'steps', style: 'margin:16px 0' },
-        h('div', { class: 'step' }, h('div', {}, 'On your PC open ', h('code', {}, 'C:\\AI\\Projects\\curio\\Curio App\\data'), '.')),
+        h('div', { class: 'step' }, h('div', {}, 'On your PC open your Curio data folder (yours: ', h('code', {}, 'C:\\AI\\Projects\\curio\\Media'), ').')),
         h('div', { class: 'step' }, h('div', {}, 'Finance: ', h('code', {}, 'finance\\finance.db'), '  ·  Pages: ', h('code', {}, 'pages\\pages.db'), '  ·  pictures in ', h('code', {}, 'pages\\files'), ' (select them all).')),
         h('div', { class: 'step' }, h('div', {}, 'Close Curio on the PC first, so the files are complete.'))),
       h('div', { class: 'drop' }, l1, fFin), h('div', { class: 'drop', style: 'margin-top:8px' }, l2, fPg), h('div', { class: 'drop', style: 'margin-top:8px' }, l3, fFiles),
@@ -250,7 +262,11 @@
     window.addEventListener('hashchange', route);
     $('#menu').onclick = () => { $('#side').classList.add('open'); $('#scrim').classList.add('on'); };
     $('#scrim').onclick = () => { $('#side').classList.remove('open'); $('#scrim').classList.remove('on'); };
-    window.addEventListener('message', (e) => { if (e.origin === location.origin && e.data && e.data.curio === 'go') location.hash = '#/' + e.data.to; });
+    window.addEventListener('message', (e) => {
+      if (e.origin !== location.origin || !e.data || e.data.curio !== 'go') return;
+      if (e.data.to === 'pages' && e.data.doc) openPage(e.data.doc);
+      location.hash = '#/' + e.data.to;
+    });
   }
   start();
 })();

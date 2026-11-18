@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Calendar · Curio</title>
+<script>(function(){var t=new URLSearchParams(location.search).get('theme');try{t=t||localStorage.getItem('curio-theme')||'system'}catch(e){}if(t==='system')t=matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';document.documentElement.dataset.theme=t})()</script>
+<link rel="stylesheet" href="calendar.css">
+</head>
+<body>
+<div class="app">
+  <aside class="left" id="left"></aside>
+  <section class="center"><div class="bar" id="bar"></div><div class="grid" id="grid"></div></section>
+  <aside class="right" id="right"></aside>
+</div>
+<div class="toast" id="toast"></div>
+<script src="calendar.js"></script>
+</body>
+</html>
