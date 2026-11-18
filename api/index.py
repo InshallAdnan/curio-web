@@ -83,6 +83,11 @@ def app(env, start):
         if path == '/me':
             if not u: return send('401 Unauthorized', {'error': 'signin', 'configured': auth.configured()})
             return send('200 OK', {'name': u.get('name'), 'email': u.get('email'), 'pic': u.get('pic', '')})
+        if not u and path.startswith('/import/'):
+            # one-time import without signing in: only while IMPORT_TOKEN is set in Vercel (remove it afterwards)
+            import hmac
+            tok = os.environ.get('IMPORT_TOKEN', '')
+            if len(tok) >= 24 and hmac.compare_digest(env.get('HTTP_X_IMPORT_TOKEN', ''), tok): u = {'name': 'import'}
         if not u: return send('401 Unauthorized', {'error': 'Please sign in again.', 'signin': True})
         if r.method != 'POST': return send('405 Method Not Allowed', {'error': 'POST only'})
         if env.get('HTTP_X_CURIO') != '1': return send('403 Forbidden', {'error': 'bad request'})        # only Curio's own pages call these

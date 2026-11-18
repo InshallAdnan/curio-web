@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Import · Curio</title>
+<link rel="stylesheet" href="/app.css"></head>
+<body><div class="page"><div class="card">
+<h3>Import desktop data (one-time link)</h3>
+<p>Works only while an import token is set on the server.</p>
+<div class="drop" style="margin-top:12px"><label class="muted">Token</label><input id="tok" type="password" class="inp" style="flex:1"></div>
+<div class="drop" style="margin-top:8px"><label class="muted">finance.db</label><input id="fin" type="file"></div>
+<div class="drop" style="margin-top:8px"><label class="muted">pages.db</label><input id="pg" type="file"></div>
+<div class="row" style="margin-top:14px"><button class="btn primary" id="go">Import</button></div>
+<div class="faint" id="log" style="margin-top:10px;white-space:pre-line"></div>
+</div></div>
+<script src="/vendor/sql-wasm.js"></script>
+<script>
+const TABLES={finance:['settings','accounts','categories','transactions','transfers','goals','goal_contributions','subscriptions','sub_periods','sub_charges','assets','asset_events','rates','rate_history'],pages:['docs','dbs','page_meta','page_comments']};
+const log=t=>{document.getElementById('log').textContent+=t+'\n'};
+async function post(url,body){const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json','X-Curio':'1','X-Import-Token':document.getElementById('tok').value},body:JSON.stringify(body)});const j=await r.json();if(j.error)throw new Error(j.error);return j}
+async function imp(SQL,file,domain){
+  const db=new SQL.Database(new Uint8Array(await file.arrayBuffer()));const want=TABLES[domain];
+  const q=s=>{const r=db.exec(s);return r.length?r[0]:{columns:[],values:[]}};
+  const schema=q("SELECT type,name,tbl_name,sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%'").values.map(r=>({type:r[0],name:r[1],tbl_name:r[2],sql:r[3]})).filter(s=>want.includes(s.tbl_name));
+  await post('/api/import/begin',{domain,schema});
+  for(const t of schema.filter(s=>s.type==='table').map(s=>s.name)){
+    const r=q(`SELECT * FROM "${t}"`);let batch=[],size=0;
+    const flush=async()=>{if(batch.length){await post('/api/import/rows',{table:t,cols:r.columns,rows:batch});batch=[];size=0}};
+    for(const row of r.values){const len=JSON.stringify(row).length;if(size+len>900000||batch.length>=400)await flush();batch.push(row);size+=len}
+    await flush();log(`  ${domain}.${t}: ${r.values.length}`)}
+  await post('/api/import/end',{domain});db.close()}
+document.getElementById('go').onclick=async()=>{
+  try{const SQL=await initSqlJs({locateFile:f=>'/vendor/'+f});
+    const f=document.getElementById('fin').files[0],p=document.getElementById('pg').files[0];
+    if(f){log('Finance…');await imp(SQL,f,'finance')} if(p){log('Pages…');await imp(SQL,p,'pages')} log('DONE')}
+  catch(e){log('Stopped: '+e.message)}};
+</script></body></html>
