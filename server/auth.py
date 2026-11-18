@@ -5,7 +5,7 @@ Environment (Vercel › Settings › Environment Variables):
   ALLOWED_EMAIL                            your Gmail (several: comma separated)
   AUTH_SECRET                              optional — signs the session cookie (otherwise derived from the two secrets above)
 The session is a signed cookie (30 days). Nothing about you is stored anywhere else."""
-import base64, hashlib, hmac, json, os, secrets, time, urllib.parse, urllib.request
+import base64, hashlib, hmac, json, os, secrets, time, urllib.error, urllib.parse, urllib.request
 
 COOKIE = 'curio_s'; STATE = 'curio_st'; DAYS = 30
 
@@ -65,7 +65,14 @@ def finish(origin, code, state, state_cookie):
     if not st or not hmac.compare_digest(st.get('st', ''), state or ''): raise ValueError('The sign-in took too long or came from somewhere else. Please try again.')
     data = urllib.parse.urlencode({'code': code, 'client_id': os.environ['GOOGLE_CLIENT_ID'], 'client_secret': os.environ['GOOGLE_CLIENT_SECRET'],
                                    'redirect_uri': origin + '/api/auth/callback', 'grant_type': 'authorization_code'}).encode()
-    with urllib.request.urlopen(urllib.request.Request('https://oauth2.googleapis.com/token', data=data), timeout=15) as r: tok = json.loads(r.read())
+    try:
+        with urllib.request.urlopen(urllib.request.Request('https://oauth2.googleapis.com/token', data=data), timeout=15) as r: tok = json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        try: why = json.loads(e.read()).get('error', '')
+        except Exception: why = ''
+        if why == 'invalid_client': raise ValueError('Google did not accept the Client Secret. Copy it again with the copy button in Google Cloud and paste it into Vercel as GOOGLE_CLIENT_SECRET.')
+        if why == 'redirect_uri_mismatch': raise ValueError('Add ' + origin + '/api/auth/callback to the Authorized redirect URIs of the Google client.')
+        raise ValueError(f'Google sign-in failed ({why or e.code}). Please try again.')
     # the ID token came straight from Google over TLS in exchange for our secret, so its contents can be read as they are
     claims = json.loads(_unb64(tok['id_token'].split('.')[1]))
     if claims.get('aud') != os.environ['GOOGLE_CLIENT_ID']: raise ValueError('This sign-in was not meant for Curio.')
