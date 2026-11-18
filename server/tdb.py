@@ -153,7 +153,9 @@ def remote():
     if _REMOTE is None:
         url = os.environ.get('TURSO_DATABASE_URL') or os.environ.get('LIBSQL_URL') or os.environ.get('TURSO_URL')
         tok = os.environ.get('TURSO_AUTH_TOKEN') or os.environ.get('LIBSQL_AUTH_TOKEN') or os.environ.get('TURSO_TOKEN') or ''
-        _REMOTE = Turso(url, tok) if url else Local(os.environ.get('CURIO_LOCAL_DB', os.path.join(os.getcwd(), '.data', 'curio-web.db')))
+        # no Turso yet: a scratch file (on Vercel only /tmp can be written, and it is wiped often — connect Turso!)
+        scratch = os.path.join('/tmp' if os.environ.get('VERCEL') else os.getcwd(), '.data', 'curio-web.db')
+        _REMOTE = Turso(url, tok) if url else Local(os.environ.get('CURIO_LOCAL_DB', scratch))
     return _REMOTE
 
 
