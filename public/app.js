@@ -281,9 +281,17 @@
         const sel = h('select', { class: 'inp', onchange: async () => { await ai('set_cfg', { chatgpt_model: sel.value }); toast('Model saved'); } }, h('option', { value: '' }, 'Default (first on your plan)'));
         ai('models').then(ms => { for (const m of ms) sel.append(h('option', { value: m.slug, selected: m.slug === s.cfg.chatgpt_model }, m.name)); }).catch(e => toast(e.message));
         const ctx = h('input', { type: 'checkbox', checked: s.cfg.context !== false, onchange: async () => { await ai('set_cfg', { context: ctx.checked }); toast('Saved'); } });
+        const fon = h('input', { type: 'checkbox', checked: s.cfg.finance !== false, onchange: async () => { await ai('set_cfg', { finance: fon.checked }); toast('Saved'); } });
+        const fauto = h('input', { type: 'checkbox', checked: !!s.cfg.fin_auto, onchange: async () => { await ai('set_cfg', { fin_auto: fauto.checked }); toast('Saved'); } });
+        const frules = h('textarea', { class: 'inp area', rows: 4, placeholder: 'e.g.  Default account: Meezan Bank. Food, chai, lunch → category Food. Petrol → Fuel from Cash. Titles short in English.' }, s.cfg.fin_rules || '');
+        frules.addEventListener('change', async () => { await ai('set_cfg', { fin_rules: frules.value }); toast('Rules saved'); });
         parts.push(h('div', { class: 'form2' },
           h('label', {}, h('span', { class: 'muted' }, 'Model'), sel),
-          h('label', { class: 'chk' }, ctx, h('span', {}, 'Let Ask AI look in my Pages and Finance when a question is about them'))),
+          h('label', { class: 'chk' }, ctx, h('span', {}, 'Let Ask AI look in my Pages when a question is about them')),
+          h('label', { class: 'chk' }, fon, h('span', {}, 'Connect Finance — ChatGPT sees my accounts, balances and entries, and can record money for me')),
+          h('label', { class: 'chk' }, fauto, h('span', {}, 'Save right away (no Save button) when ChatGPT records something')),
+          h('label', {}, h('span', { class: 'muted' }, 'My rules for recording (ChatGPT always follows these)'), frules,
+            h('span', { class: 'faint' }, 'Saved when you click outside the box.'))),
           h('div', { class: 'row', style: 'margin-top:14px' },
             h('a', { class: 'btn primary', href: '#/ask' }, ic('bot'), 'Open Ask AI'),
             h('a', { class: 'btn', href: 'https://chatgpt.com/settings/usage', target: '_blank', rel: 'noopener' }, 'See usage in ChatGPT'),
@@ -354,18 +362,70 @@
     input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); go(); } });
     log.addEventListener('click', (e) => { const a = e.target.closest('.cite'); if (a) { openPage(a.dataset.doc); location.hash = '#/pages'; } });
 
-    const bubble = (m) => {
+    let FM = null;
+    const fmeta = async (fresh) => { if (!FM || fresh) FM = await ai('fin_meta'); return FM; };
+    const money = (v, c) => Number(v || 0).toLocaleString(undefined, { maximumFractionDigits: 2 }) + ' ' + (c || '');
+    function finCard(m, mi, p, i) {
+      const box = h('div', { class: 'fcard ' + (p.type === 'transfer' ? 'tf' : p.kind) + ' ' + p.status });
+      const label = p.type === 'transfer' ? 'Transfer' : p.kind === 'income' ? 'Income' : 'Expense';
+      const sign = p.type === 'transfer' ? '⇄' : p.kind === 'income' ? '+' : '−';
+      const summary = p.type === 'transfer' ? `${p.from_name || '?'} → ${p.to_name || '?'}` : [p.category, p.account].filter(Boolean).join(' · ');
+      const draw = async () => {
+        const head = h('div', { class: 'fhead' }, h('span', { class: 'fsign' }, sign), h('b', {}, label), h('span', { class: 'famt' }, money(p.amount, p.currency)),
+          h('span', { class: 'fstat' }, p.status === 'saved' ? '✓ Saved' : p.status === 'cancelled' ? 'Cancelled' : 'Not saved yet'));
+        if (p.status !== 'pending') {
+          box.replaceChildren(head, h('div', { class: 'fline' }, [summary, p.title, p.date].filter(Boolean).join(' · '),
+            p.status === 'saved' ? h('a', { href: '#/finance', class: 'flink' }, 'Open in Finance') : null));
+          return;
+        }
+        const M = await fmeta().catch(() => ({ accounts: [], categories: [] }));
+        const accSel = (val) => h('select', { class: 'inp' }, h('option', { value: '' }, 'Choose account…'), M.accounts.map(a => h('option', { value: a.id, selected: a.id === val }, `${a.name} (${a.currency})`)));
+        const amt = h('input', { class: 'inp', inputmode: 'decimal', value: p.amount });
+        const date = h('input', { class: 'inp', type: 'date', value: p.date });
+        const title = h('input', { class: 'inp', value: p.title || '', placeholder: 'Title' });
+        let fields, read;
+        if (p.type === 'transfer') {
+          const f = accSel(p.from_id), t = accSel(p.to_id);
+          fields = [h('label', {}, 'From', f), h('label', {}, 'To', t), h('label', {}, 'Amount', amt), h('label', {}, 'Date', date), h('label', { class: 'wide' }, 'Note', title)];
+          read = () => ({ from_id: f.value, to_id: t.value, amount: amt.value, date: date.value, title: title.value });
+        } else {
+          const acc = accSel(p.account_id);
+          const dl = 'fc' + mi + '_' + i;
+          const cat = h('input', { class: 'inp', value: p.category || '', list: dl, placeholder: 'Category' });
+          const opts = h('datalist', { id: dl }, M.categories.filter(c => c.kind === p.kind).map(c => h('option', { value: c.name })));
+          fields = [h('label', {}, 'Amount', amt), h('label', {}, 'Account', acc), h('label', {}, 'Category', cat, opts), h('label', {}, 'Date', date), h('label', { class: 'wide' }, 'Title', title)];
+          read = () => { const c = M.categories.find(x => x.kind === p.kind && x.name.toLowerCase() === cat.value.trim().toLowerCase());
+            return { amount: amt.value, account_id: acc.value, category: cat.value.trim(), category_id: c ? c.id : '', date: date.value, title: title.value }; };
+        }
+        const save = h('button', { class: 'btn primary', onclick: async () => {
+          save.disabled = true;
+          try { const r = await ai('fin_card', { id: cur.id, msg: mi, i, edits: read() }); Object.assign(p, r); m.actions[i] = p; toast('Saved in Finance ✓'); fmeta(true); draw(); }
+          catch (e) { toast(e.message); save.disabled = false; }
+        } }, 'Save');
+        const cancel = h('button', { class: 'btn ghost', onclick: async () => { try { Object.assign(p, await ai('fin_card', { id: cur.id, msg: mi, i, cancel: true })); draw(); } catch (e) { toast(e.message); } } }, 'Cancel');
+        box._save = () => save.click();
+        box.replaceChildren(...[head, h('div', { class: 'fgrid' }, fields), p.problem ? h('div', { class: 'fprob' }, p.problem) : null, h('div', { class: 'row', style: 'margin-top:10px' }, save, cancel)].filter(Boolean));
+      };
+      draw();
+      return box;
+    }
+    const bubble = (m, mi) => {
       if (m.role === 'user') return h('div', { class: 'msg me' }, h('div', { class: 'b' }, m.content));
       const used = [];
       for (const p of m.pages || []) used.push(h('a', { class: 'chip', onclick: () => { openPage(p.id); location.hash = '#/pages'; } }, (p.icon || '📄') + ' ' + p.title));
       if (m.finance) used.push(h('a', { class: 'chip', href: '#/finance' }, '💰 Finance'));
       return h('div', { class: 'msg ai' + (m.err ? ' err' : '') }, h('div', { class: 'av' }, ic('bot')), h('div', { class: 'b' }, h('div', { class: 'mdx', html: md(m.content, m.pages) }),
         used.length ? h('div', { class: 'used' }, h('span', { class: 'faint' }, 'Looked at:'), used) : null,
+        (m.actions && m.actions.length) ? (() => {
+          const cards = m.actions.map((p, i) => finCard(m, mi, p, i));
+          const pend = m.actions.filter(p => p.status === 'pending').length;
+          return h('div', { class: 'fcards' }, cards, pend > 1 ? h('button', { class: 'btn', onclick: () => cards.forEach(c => c._save && m.actions[cards.indexOf(c)].status === 'pending' && c._save()) }, `Save all ${pend}`) : null);
+        })() : null,
         m.model ? h('div', { class: 'faint', style: 'margin-top:6px' }, m.model) : null));
     };
     const empty = () => h('div', { class: 'askempty' }, h('div', { class: 'soonbox', style: 'padding:40px 10px' }, h('div', { class: 'ic' }, ic('bot')), h('h1', {}, 'Ask AI'),
-      h('p', { class: 'sub', style: 'max-width:480px;margin:8px auto 18px' }, 'Chat with ChatGPT on your own plan. It can also look in your Pages and Finance when the question is about them.'),
-      h('div', { class: 'row', style: 'justify-content:center' }, ['Is mahine maine kis cheez pe sab se zyada kharch kiya?', 'Meri pages me ideas ka summary do', 'Kal ke liye ek plan bana do'].map(t =>
+      h('p', { class: 'sub', style: 'max-width:480px;margin:8px auto 18px' }, 'Chat with ChatGPT on your own plan. It knows your Finance book — ask about your money, or say “record 1200 lunch” and it adds it.'),
+      h('div', { class: 'row', style: 'justify-content:center' }, ['Is mahine maine kis cheez pe sab se zyada kharch kiya?', 'Meri pages me ideas ka summary do', 'Aaj lunch 1200 ka Meezan se kharch hua'].map(t =>
         h('button', { class: 'btn', onclick: () => { input.value = t; go(); } }, t)))));
     async function loadList() {
       let rows = []; try { rows = await ai('chats'); } catch (e) { /* shown on send */ }
@@ -376,7 +436,7 @@
     }
     async function open(id) {
       cur = id ? await ai('chat', { id }) : null;
-      log.replaceChildren(...(cur && cur.msgs.length ? cur.msgs.map(bubble) : [empty()]));
+      log.replaceChildren(...(cur && cur.msgs.length ? cur.msgs.map((m, i) => bubble(m, i)) : [empty()]));
       log.scrollTop = log.scrollHeight; loadList(); input.focus();
     }
     async function checkStatus() {
@@ -393,7 +453,7 @@
       log.append(wait); log.scrollTop = log.scrollHeight;
       try {
         const r = await ai('ask', { id: cur.id, text });
-        cur.id = r.id; wait.replaceWith(bubble(r.msg)); loadList();
+        cur.id = r.id; cur.msgs = cur.msgs || []; cur.msgs[r.index] = r.msg; wait.replaceWith(bubble(r.msg, r.index)); loadList();
       } catch (e) { wait.replaceWith(bubble({ role: 'assistant', content: e.message, err: true })); input.value = text; if (/connect|sign in/i.test(e.message)) checkStatus(); }
       busy = false; send.disabled = false; log.scrollTop = log.scrollHeight; input.focus();
     }

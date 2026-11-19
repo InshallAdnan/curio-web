@@ -78,13 +78,15 @@ def kv_set(k, v, secret=False):
 
 def cfg():
     c = kv_get('ai_cfg') or {}
-    return {'provider': c.get('provider') or 'chatgpt', 'chatgpt_model': c.get('chatgpt_model') or '', 'context': c.get('context', True)}
+    return {'provider': c.get('provider') or 'chatgpt', 'chatgpt_model': c.get('chatgpt_model') or '', 'context': c.get('context', True),
+            'finance': c.get('finance', True), 'fin_auto': bool(c.get('fin_auto', False)), 'fin_rules': c.get('fin_rules') or ''}
 
 
 def set_cfg(a):
     c = cfg()
-    for k in ('chatgpt_model', 'context', 'provider'):
+    for k in ('chatgpt_model', 'context', 'provider', 'finance', 'fin_auto'):
         if k in a: c[k] = a[k]
+    if 'fin_rules' in a: c['fin_rules'] = str(a['fin_rules'] or '')[:3000]
     kv_set('ai_cfg', c); return c
 
 
@@ -404,7 +406,7 @@ Sometimes you get "From your Curio" notes: matching Pages (numbered [P1], [P2] �
 question is about the user's notes, plans, money or spending — cite pages like [P1] right after the point they support.
 Never invent numbers or what a page says. If the notes do not cover it, say so briefly and help anyway.
 Start with the direct answer. Be concrete. Short replies for chit-chat. Use bullets only when there are several points.
-Money: use the user's currency as given. Reply in the same language and style the user writes in (Roman Urdu, Urdu, Hindi, English or a mix)."""
+Money: use the user's currency as given; format amounts with thousands separators. Reply in the same language and style the user writes in (Roman Urdu, Urdu, Hindi, English or a mix)."""
 
 _STOP = set('the a an is are was were be to of in on for and or with my me i you it this that what how kya hai hain ka ki ke ko se mein me main mera meri mujhe aur ya bhi tha thi kar karo kaise kitna kitne'.split())
 _MONEY = re.compile(r'\b(money|spen[dt]|spending|expense|expenses|income|salary|balance|account|bank|budget|paise|paisa|pesa|kharch|kharcha|amdani|rupe|rs|pkr|usd|\$|saving|savings|goal|subscription|bill|paid|pay|transaction|finance|loan|wallet)\w*', re.I)
@@ -429,29 +431,6 @@ def _pages_context(q, n=5):
     return pages.run(go)
 
 
-def _finance_context():
-    import fin
-    from finance import ledger, reports, currency
-    def go(con):
-        accs = ledger.accounts(con, True)
-        if not accs: return ''
-        from finance.util import this_month, add_months
-        b = currency.base(con); bal = ledger.balances(con); m = this_month()
-        lines = [f'Currency: {b}. Amounts are in {b} unless shown. Today: {time.strftime("%Y-%m-%d")}.']
-        lines.append('Accounts: ' + '; '.join(f'{a["name"]} {bal.get(a["id"], 0) / 100:,.0f} {a["currency"]}' for a in accs if not a['archived']))
-        for mm in (m, add_months(m, -1)):
-            s = reports.month_summary(con, mm)
-            cats = reports.category_breakdown(con, mm, 'expense')[:8]
-            lines.append(f'{mm}: income {s["income"] / 100:,.0f}, spent {s["expense"] / 100:,.0f}. Top spending: ' + ', '.join(f'{n} {v / 100:,.0f}' for n, v in cats))
-        rec = [dict(r) for r in ledger.list_transactions(con, limit=30)]
-        lines.append('Latest transactions (date | account | kind | amount | category | title):')
-        for r in rec:
-            lines.append(f'{r["date"]} | {r.get("account_name") or ""} | {r["kind"]} | {abs(r["net"]) / 100:,.0f} {r["currency"]} | {r.get("category_name") or ""} | {(r.get("title") or r.get("note") or "")[:60]}')
-        return '\n'.join(lines)
-    try: return fin.run(go)
-    except Exception: return ''
-
-
 def chats(a=None):
     rows = _db([('SELECT id, title, created, updated FROM ai_chats ORDER BY updated DESC LIMIT 200', ())])[0].dicts()
     return rows
@@ -471,36 +450,99 @@ def delete(a):
     _db([('DELETE FROM ai_chats WHERE id=?', (a['id'],))]); return True
 
 
+def _save_chat(cid, title, created, msgs):
+    _db([('INSERT INTO ai_chats (id, title, created, updated, msgs) VALUES (?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET msgs=excluded.msgs, updated=excluded.updated',
+          (cid, title, created, time.time(), json.dumps(msgs, ensure_ascii=False)))])
+
+
 def ask(a):
+    import fin, fin_ai
     text = (a.get('text') or '').strip()
     if not text: raise AIError('empty', 'Write a message first.')
     c = cfg()
     cur = chat({'id': a['id']}) if a.get('id') else None
     msgs = (cur or {}).get('msgs') or []
     use_ctx = a.get('context', c['context'])
-    found, fctx = [], ''
+    found, card, detail = [], '', ''
     if use_ctx:
         try: found = _pages_context(text)
         except Exception: found = []
-        if _MONEY.search(text): fctx = _finance_context()
-    note = ''
-    if found or fctx:
-        parts = ['From your Curio (use only if it helps):']
+    if c['finance']:
+        recent = ' '.join(m['content'] for m in msgs[-2:] if m['role'] == 'user')
+        money = bool(_MONEY.search(text) or _MONEY.search(recent) or re.search(r'\d', text))
+        try: card, detail = fin.run(lambda con: (fin_ai.book(con), fin_ai.details(con) if money else ''))
+        except Exception: card, detail = '', ''
+    parts = []
+    if found:
+        parts.append('From your Pages (use only if it helps):')
         for i, p in enumerate(found, 1): parts.append(f'[P{i}] {p["icon"]} {p["title"]}\n{p["text"]}')
-        if fctx: parts.append('Finance summary:\n' + fctx)
-        note = '\n\n'.join(parts)
+    if card: parts.append('Finance book:\n' + card + ('\n' + detail if detail else ''))
+    note = '\n\n'.join(parts)
+    system = SYSTEM
+    if card:
+        system += '\n' + fin_ai.PROTOCOL
+        if c['fin_rules'].strip(): system += "\nTHE USER'S OWN RULES FOR RECORDING (always follow):\n" + c['fin_rules'].strip()
     hist = [{'role': m['role'], 'content': m['content'][:4000]} for m in msgs[-12:]]
-    q = text if not note else f'{text}\n\n---\n{note}'
-    answer, usage, model = respond(hist + [{'role': 'user', 'content': q}], SYSTEM, a.get('model') or c['chatgpt_model'])
+    convo = hist + [{'role': 'user', 'content': text if not note else f'{text}\n\n---\n{note}'}]
+    model_pick = a.get('model') or c['chatgpt_model']
+    looked = []
+    for _ in range(3):                                   # the AI may look records up (up to twice) before it answers
+        answer, usage, model = respond(convo, system, model_pick)
+        shown, acts, want = fin_ai.parse(answer) if card else (answer, [], None)
+        if not want or len(looked) >= 2: break
+        res = fin.run(lambda con: fin_ai.find(con, want)); looked.append(want)
+        convo = convo + [{'role': 'assistant', 'content': answer}, {'role': 'user', 'content': 'Curio Finance — records you asked for:\n' + res + '\nNow answer the user.'}]
+    cards = []
+    if acts:
+        cards = fin.run(lambda con: [fin_ai.resolve(con, x) for x in acts])
+        if c['fin_auto']:
+            for p in cards:
+                if p['problem']: continue
+                try: p['id'] = fin.run(lambda con, p=p: fin_ai.apply(con, p)); p['status'] = 'saved'
+                except Exception as e: p['problem'] = str(e)
+    if not shown.strip() and cards: shown = 'Recording this in Finance:'
     now = time.time()
     msgs = msgs + [{'role': 'user', 'content': text, 'ts': now},
-                   {'role': 'assistant', 'content': answer, 'ts': time.time(), 'model': model, 'pages': [{'id': p['id'], 'title': p['title'], 'icon': p['icon']} for p in found],
-                    'finance': bool(fctx)}]
+                   {'role': 'assistant', 'content': shown, 'ts': time.time(), 'model': model, 'pages': [{'id': p['id'], 'title': p['title'], 'icon': p['icon']} for p in found],
+                    'finance': bool(detail or looked), 'actions': cards}]
     cid = (cur or {}).get('id') or a.get('id') or uuid.uuid4().hex[:12]
     title = (cur or {}).get('title') or re.sub(r'\s+', ' ', text)[:60]
-    _db([('INSERT INTO ai_chats (id, title, created, updated, msgs) VALUES (?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET msgs=excluded.msgs, updated=excluded.updated',
-          (cid, title, (cur or {}).get('created') or now, time.time(), json.dumps(msgs, ensure_ascii=False)))])
-    return {'id': cid, 'title': title, 'msg': msgs[-1]}
+    _save_chat(cid, title, (cur or {}).get('created') or now, msgs)
+    return {'id': cid, 'title': title, 'msg': msgs[-1], 'index': len(msgs) - 1}
+
+
+def fin_card(a):
+    """Save / Cancel one Finance card of an answer: {id, msg, i, edits?, cancel?}"""
+    import fin, fin_ai
+    cur = chat({'id': a['id']})
+    if not cur: raise AIError('gone', 'That chat is gone.')
+    msgs = cur['msgs']; mi = int(a['msg']); i = int(a['i'])
+    p = msgs[mi]['actions'][i]
+    if p.get('status') == 'saved': return p
+    if a.get('cancel'): p['status'] = 'cancelled'
+    else:
+        e = a.get('edits') or {}
+        for k in ('amount', 'amount_in', 'title', 'note', 'date', 'time', 'category', 'kind'):
+            if k in e: p[k] = e[k]
+        if 'amount' in e: p['amount'] = abs(fin_ai._amount(e['amount']))
+        for k in ('account_id', 'from_id', 'to_id', 'category_id'):
+            if k in e: p[k] = int(e[k]) if e[k] not in (None, '', 'new') else None
+        if 'category' in e and 'category_id' not in e: p['category_id'] = None
+        def go(con):
+            m = fin_ai.meta(con); names = {x['id']: x['name'] for x in m['accounts']}
+            if p['type'] == 'transfer': p['from_name'] = names.get(p.get('from_id'), p.get('from_name')); p['to_name'] = names.get(p.get('to_id'), p.get('to_name'))
+            else:
+                p['account'] = names.get(p.get('account_id'), p.get('account'))
+                if p.get('category_id'): p['category'] = next((x['name'] for x in m['categories'] if x['id'] == p['category_id']), p.get('category'))
+            return fin_ai.apply(con, p)
+        p['id'] = fin.run(go); p['status'] = 'saved'; p['problem'] = ''
+    _save_chat(cur['id'], cur['title'], cur['created'], msgs)
+    return p
+
+
+def fin_meta(a=None):
+    import fin, fin_ai
+    return fin.run(fin_ai.meta)
 
 
 def settings(a=None):
@@ -508,7 +550,8 @@ def settings(a=None):
 
 
 OPS = {'settings': settings, 'set_cfg': set_cfg, 'status': status, 'start': start, 'finish': finish, 'logout': logout, 'reset': reset,
-       'models': models, 'chats': chats, 'chat': chat, 'rename': rename, 'delete': delete, 'ask': ask}
+       'models': models, 'chats': chats, 'chat': chat, 'rename': rename, 'delete': delete, 'ask': ask,
+       'fin_card': fin_card, 'fin_meta': fin_meta}
 
 
 def call(op, args):
