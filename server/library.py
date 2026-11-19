@@ -65,8 +65,8 @@ def known(a):
     out = set()
     for i in range(0, len(keys), 200):
         part = keys[i:i + 200]
-        sql = 'SELECT platform, item_id FROM lib_items WHERE ' + ' OR '.join(['(platform=? AND item_id=?)'] * len(part))
-        out |= {f'{p}:{k}' for p, k in _db([(sql, [v for pk in part for v in pk])])[0].rows}
+        sql = "SELECT platform, item_id FROM lib_items WHERE platform || ':' || item_id IN (%s)" % ','.join('?' * len(part))
+        out |= {f'{p}:{k}' for p, k in _db([(sql, [f'{pk[0]}:{pk[1]}' for pk in part])])[0].rows}
     return sorted(out)
 
 

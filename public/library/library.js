@@ -233,19 +233,20 @@
         info.textContent = `${rows.length} saves with pictures found · ${boards.length} boards. Newest first.`;
       } catch (e) { info.textContent = 'This does not look like Curio\'s library file: ' + e.message; DB = null; }
     };
-    const go = h('button', { class: 'btn primary', onclick: run }, 'Start import');
+    const go = h('button', { class: 'btn primary', onclick: () => run().catch(e => { say('Stopped: ' + e.message); toast(e.message); ov._busy = false; go.disabled = false; }) }, 'Start import');
     async function run() {
       if (!DB) return toast('Choose library_v4.sqlite3 first');
       if (!fDir.files.length) return toast('Choose your Media folder (step 2)');
+      log.textContent = ''; say('Checking what is already on the web…');
       const n = Math.max(1, Math.min(500, parseInt(howMany.value, 10) || 40));
       const pick = rows.filter(r => (!plat.value || r.platform === plat.value) && (!catSel.value || r.category === catSel.value));
       const already = new Set(await api('known', { keys: pick.slice(0, n * 3).map(r => [r.platform, String(r.item_id)]) }));
       const todo = pick.filter(r => !already.has(r.platform + ':' + r.item_id)).slice(0, n);
-      if (!todo.length) return toast('These saves are already on the web');
+      if (!todo.length) { say('These saves are already on the web.'); return toast('These saves are already on the web'); }
       // index the chosen folder by the last parts of each path
       const idx3 = new Map(), idx2 = new Map();
       for (const f of fDir.files) { const p = norm(f.webkitRelativePath || f.name); idx3.set(p.slice(-3).join('/'), f); idx2.set(p.slice(-2).join('/'), f); }
-      go.disabled = true; ov._busy = true; bar.style.display = 'block'; log.textContent = '';
+      go.disabled = true; ov._busy = true; bar.style.display = 'block';
       say(`Importing ${todo.length} saves…`);
       let ok = 0, miss = 0, bytes = 0; const okKeys = new Set();
       for (let k = 0; k < todo.length; k++) {
