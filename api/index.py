@@ -104,6 +104,11 @@ def app(env, start):
             b = r.json()
             try: return send('200 OK', {'ok': True, 'data': cal.call(b.get('op'), b.get('args') or {})})
             except (ValueError, KeyError, tdb.Conflict) as e: return send('200 OK', {'error': str(e) if not isinstance(e, KeyError) else f'Missing: {e}'})
+        if path == '/lib':
+            import library
+            b = r.json()
+            try: return send('200 OK', {'ok': True, 'data': library.call(b.get('op'), b.get('args') or {})})
+            except (ValueError, KeyError) as e: return send('200 OK', {'error': str(e) if not isinstance(e, KeyError) else f'Missing: {e}'})
         if path == '/ai':
             import ai
             b = r.json()

@@ -38,7 +38,7 @@
     s.setAttribute('stroke-width', '1.8'); s.setAttribute('stroke-linecap', 'round'); s.setAttribute('stroke-linejoin', 'round'); const p = document.createElementNS('http://www.w3.org/2000/svg', 'path'); p.setAttribute('d', P[n] || ''); s.append(p); return s; };
 
   // ── what is in the sidebar ──
-  const LIVE = { home: 1, pages: 1, finance: 1, calendar: 1, settings: 1, ask: 1 };
+  const LIVE = { home: 1, pages: 1, finance: 1, calendar: 1, settings: 1, ask: 1, moodboard: 1, boards: 1 };
   const NAV = [
     [null, [['home', 'Home', 'home'], ['explore', 'Explore', 'explore']]],
     ['Library', [['moodboard', 'Moodboard', 'grid'], ['boards', 'My Boards', 'bookmark'], ['bookmarks', 'Bookmarks', 'globe'], ['insights', 'Insights', 'chart'], ['rediscover', 'Rediscover', 'spark']]],
@@ -81,6 +81,8 @@
     let v;
     if (k === 'pages') v = frame('pages', '/pages/index.html?theme=' + theme() + '#/documents');
     else if (k === 'finance') v = frame('finance', '/finance/index.html?theme=' + theme());
+    else if (k === 'moodboard') v = frame('moodboard', '/library/index.html?theme=' + theme() + '#moodboard');
+    else if (k === 'boards') v = frame('boards', '/library/index.html?theme=' + theme() + '#boards');
     else if (k === 'calendar') v = frame('calendar', '/calendar/index.html?theme=' + theme());
     else if (k === 'home') { v = view('home', () => {}); renderHome(v); }
     else if (k === 'settings') { v = view('settings', () => {}); renderSettings(v); }
