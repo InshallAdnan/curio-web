@@ -19,6 +19,7 @@
     const j = await r.json(); if (j.error) throw new Error(j.error); return j;
   };
   const fin = async (op, args = {}) => (await post('/api/fin', { op, args })).data;
+  const ai = async (op, args = {}) => (await post('/api/ai', { op, args })).data;
   const signIn = () => { location.href = '/api/auth/login?next=' + encodeURIComponent(location.pathname + location.hash); };
 
   // ── icons (simple line icons) ──
@@ -37,7 +38,7 @@
     s.setAttribute('stroke-width', '1.8'); s.setAttribute('stroke-linecap', 'round'); s.setAttribute('stroke-linejoin', 'round'); const p = document.createElementNS('http://www.w3.org/2000/svg', 'path'); p.setAttribute('d', P[n] || ''); s.append(p); return s; };
 
   // ── what is in the sidebar ──
-  const LIVE = { home: 1, pages: 1, finance: 1, calendar: 1, settings: 1 };
+  const LIVE = { home: 1, pages: 1, finance: 1, calendar: 1, settings: 1, ask: 1 };
   const NAV = [
     [null, [['home', 'Home', 'home'], ['explore', 'Explore', 'explore']]],
     ['Library', [['moodboard', 'Moodboard', 'grid'], ['boards', 'My Boards', 'bookmark'], ['bookmarks', 'Bookmarks', 'globe'], ['insights', 'Insights', 'chart'], ['rediscover', 'Rediscover', 'spark']]],
@@ -83,6 +84,7 @@
     else if (k === 'calendar') v = frame('calendar', '/calendar/index.html?theme=' + theme());
     else if (k === 'home') { v = view('home', () => {}); renderHome(v); }
     else if (k === 'settings') { v = view('settings', () => {}); renderSettings(v); }
+    else if (k === 'ask') v = view('ask', (el) => renderAsk(el));
     else { v = view('soon-' + k, (el) => renderSoon(el, k)); }
     for (const x of Object.values(views)) x.classList.toggle('on', x === v);
     document.querySelectorAll('.nav').forEach(n => n.classList.toggle('on', n.dataset.k === k));
@@ -145,7 +147,7 @@
   // ── Settings + import ──
   function renderSettings(v) {
     v.replaceChildren(h('div', { class: 'page fade' }, h('h1', {}, 'Settings'), h('p', { class: 'sub' }, 'Curio on the web — your Pages and Finance, from any device.'),
-      h('div', { class: 'grid', style: 'grid-template-columns:1fr' }, storageCard(), importCard(), themeCard(), accountCard())));
+      h('div', { class: 'grid', style: 'grid-template-columns:1fr' }, aiCard(), storageCard(), importCard(), themeCard(), accountCard())));
   }
   function storageCard() {
     const st = h('span', { class: 'pill' }, 'checking…');
@@ -170,7 +172,7 @@
   function accountCard() {
     return h('div', { class: 'card' }, h('h3', {}, 'Account'), h('p', {}, `Signed in as ${ME ? ME.email : ''} with Google. Only this account can open your Curio.`),
       h('div', { class: 'row', style: 'margin-top:12px' }, h('a', { class: 'btn', href: '/api/auth/logout' }, ic('out'), 'Sign out')),
-      h('p', { class: 'faint', style: 'margin-top:14px' }, 'ChatGPT (Sign in with ChatGPT) and the other sections are coming next. The desktop app keeps working on its own.'));
+      h('p', { class: 'faint', style: 'margin-top:14px' }, 'The desktop app keeps working on its own, with its own data.'));
   }
 
   function importCard() {
@@ -249,6 +251,152 @@
     }
     if (domain === 'finance') await post('/api/import/end', { domain });
     db.close();
+  }
+
+  // ── AI models (Settings) ──
+  function aiCard() {
+    const body = h('div', {}, h('p', {}, 'Loading…'));
+    const pill = h('span', { class: 'pill' }, '…');
+    const card = h('div', { class: 'card', id: 'aicard' },
+      h('div', { class: 'row' }, h('h3', { style: 'margin:0' }, 'AI models'), pill),
+      h('p', { style: 'margin-top:6px' }, 'Connect the AI that Ask AI uses. ChatGPT runs on your own ChatGPT Plus / Pro plan — no API key.'), body);
+    const draw = async () => {
+      let s;
+      try { s = await ai('settings'); } catch (e) { body.replaceChildren(h('p', { style: 'margin-top:10px;color:var(--expense)' }, e.message)); return; }
+      const c = s.chatgpt, ready = c.state === 'ready';
+      pill.textContent = ready ? 'ChatGPT connected' : c.state === 'no_plan' ? 'Plan usage not allowed' : 'Not connected';
+      pill.className = 'pill ' + (ready ? 'ok' : 'warn');
+      const rowsP = h('div', { class: 'providers' });
+      const gpt = h('div', { class: 'prov' + (ready ? ' on' : '') },
+        h('div', { class: 'prov-ic gpt' }, ic('bot')),
+        h('div', { class: 'prov-t' }, h('b', {}, 'ChatGPT'), h('span', { class: 'muted' }, ready ? `Signed in${c.email ? ' as ' + c.email : ''} · uses your ChatGPT plan` : 'Sign in with ChatGPT — your Plus / Pro plan, no API key')),
+        ready ? h('span', { class: 'pill ok' }, 'Active') : null);
+      rowsP.append(gpt);
+      for (const [n, t] of [['Gemini', 'Free key from Google AI Studio'], ['Claude', 'Anthropic API key'], ['Ollama', 'Runs on your own PC (desktop app only)']])
+        rowsP.append(h('div', { class: 'prov dim' }, h('div', { class: 'prov-ic' }, ic('spark')), h('div', { class: 'prov-t' }, h('b', {}, n), h('span', { class: 'muted' }, t)), h('span', { class: 'soon' }, 'Soon')));
+      const parts = [rowsP];
+      if (ready) {
+        const sel = h('select', { class: 'inp', onchange: async () => { await ai('set_cfg', { chatgpt_model: sel.value }); toast('Model saved'); } }, h('option', { value: '' }, 'Default (first on your plan)'));
+        ai('models').then(ms => { for (const m of ms) sel.append(h('option', { value: m.slug, selected: m.slug === s.cfg.chatgpt_model }, m.name)); }).catch(e => toast(e.message));
+        const ctx = h('input', { type: 'checkbox', checked: s.cfg.context !== false, onchange: async () => { await ai('set_cfg', { context: ctx.checked }); toast('Saved'); } });
+        parts.push(h('div', { class: 'form2' },
+          h('label', {}, h('span', { class: 'muted' }, 'Model'), sel),
+          h('label', { class: 'chk' }, ctx, h('span', {}, 'Let Ask AI look in my Pages and Finance when a question is about them'))),
+          h('div', { class: 'row', style: 'margin-top:14px' },
+            h('a', { class: 'btn primary', href: '#/ask' }, ic('bot'), 'Open Ask AI'),
+            h('a', { class: 'btn', href: 'https://chatgpt.com/settings/usage', target: '_blank', rel: 'noopener' }, 'See usage in ChatGPT'),
+            h('button', { class: 'btn ghost', onclick: async () => { if (!confirm('Disconnect ChatGPT from Curio Web?')) return; await ai('logout'); draw(); } }, 'Disconnect')));
+      } else {
+        const paste = h('input', { class: 'inp', placeholder: 'http://127.0.0.1:1455/auth/callback?code=…', autocomplete: 'off', spellcheck: 'false' });
+        const fin2 = h('button', { class: 'btn primary', onclick: async () => {
+          if (!paste.value.trim()) return toast('Paste the address first');
+          fin2.disabled = true;
+          try { await ai('finish', { url: paste.value }); toast('ChatGPT connected ✓'); draw(); } catch (e) { toast(e.message); fin2.disabled = false; }
+        } }, 'Finish');
+        const go = h('button', { class: 'btn primary', onclick: async () => {
+          const w = window.open('about:blank', '_blank');
+          try { const r = await ai('start', c.state === 'no_plan' ? { reconsent: true } : {}); if (w) w.location = r.url; else location.href = r.url; step2.style.display = ''; paste.focus(); }
+          catch (e) { if (w) w.close(); toast(e.message); }
+        } }, ic('bot'), 'Continue with ChatGPT');
+        const step2 = h('div', { class: 'steps', style: (c.pending ? '' : 'display:none;') + 'margin-top:16px' },
+          h('div', { class: 'step' }, h('div', {}, 'In the new tab sign in to ChatGPT and approve ', h('b', {}, 'Curio'), '.')),
+          h('div', { class: 'step' }, h('div', {}, 'The tab then goes to an address starting with ', h('code', {}, 'http://127.0.0.1:1455'), ' and says it can\'t connect — that is expected. Copy that whole address from the address bar.')),
+          h('div', { class: 'step' }, h('div', { style: 'flex:1' }, 'Paste it here:', h('div', { class: 'row', style: 'margin-top:8px;flex-wrap:nowrap' }, paste, fin2))));
+        parts.push(h('div', { class: 'row', style: 'margin-top:14px' }, go,
+          c.state !== 'none' ? h('button', { class: 'btn ghost', onclick: async () => { if (!confirm('Forget the ChatGPT connection completely and register Curio again?')) return; await ai('reset'); draw(); } }, 'Start over') : null), step2,
+          h('p', { class: 'faint', style: 'margin-top:12px' }, 'Needs a personal ChatGPT Plus or Pro account. Your sign-in is kept encrypted in your own database and only used for Ask AI answers on your plan — it cannot read your ChatGPT chats. You can limit or remove Curio any time in ChatGPT › Settings.'));
+      }
+      body.replaceChildren(...parts);
+    };
+    draw();
+    return card;
+  }
+
+  // ── Ask AI ──
+  const esc = (t) => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  function md(t, pagesUsed) {
+    const blocks = String(t || '').split(/```/);
+    return blocks.map((b, i) => {
+      if (i % 2) { const nl = b.indexOf('\n'); return '<pre><code>' + esc(nl > -1 ? b.slice(nl + 1) : b) + '</code></pre>'; }
+      let x = esc(b);
+      x = x.replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>').replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<i>$2</i>');
+      x = x.replace(/\[P(\d+)\]/g, (m, n) => { const p = (pagesUsed || [])[n - 1]; return p ? `<a class="cite" data-doc="${esc(p.id)}" title="${esc(p.title)}">${esc(p.icon || '📄')} ${esc(p.title)}</a>` : m; });
+      x = x.replace(/\[(\w[^\]]*)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+      const lines = x.split('\n'); let out = '', list = null;
+      for (const ln of lines) {
+        const ul = ln.match(/^\s*[-*•]\s+(.*)/), ol = ln.match(/^\s*\d+[.)]\s+(.*)/), hd = ln.match(/^\s*#{1,4}\s+(.*)/);
+        const want = ul ? 'ul' : ol ? 'ol' : null;
+        if (list && want !== list) { out += `</${list}>`; list = null; }
+        if (want) { if (!list) { out += `<${want}>`; list = want; } out += `<li>${(ul || ol)[1]}</li>`; continue; }
+        if (hd) { out += `<h4>${hd[1]}</h4>`; continue; }
+        out += ln.trim() ? `<p>${ln}</p>` : '';
+      }
+      if (list) out += `</${list}>`;
+      return out;
+    }).join('');
+  }
+  function renderAsk(el) {
+    let cur = null, busy = false, status = null;
+    const list = h('div', { class: 'chatlist' });
+    const log = h('div', { class: 'chatlog' });
+    const input = h('textarea', { class: 'chatin', rows: 1, placeholder: 'Ask anything — “is mahine food pe kitna kharch hua?”, “summarise my Ideas page”…' });
+    const send = h('button', { class: 'btn primary send', title: 'Send', onclick: () => go() }, '↑');
+    const modelTag = h('span', { class: 'faint' });
+    const banner = h('div');
+    const wrap = h('div', { class: 'ask' },
+      h('aside', { class: 'askside' }, h('button', { class: 'btn primary', style: 'width:100%;justify-content:center', onclick: () => open(null) }, '+ New chat'), list),
+      h('section', { class: 'askmain' }, banner, log, h('div', { class: 'composer' }, h('div', { class: 'cbox' }, input, send), h('div', { class: 'row', style: 'justify-content:space-between;margin-top:6px' }, modelTag,
+        h('span', { class: 'faint' }, 'Enter to send · Shift+Enter new line')))));
+    el.append(wrap);
+    input.addEventListener('input', () => { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 200) + 'px'; });
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); go(); } });
+    log.addEventListener('click', (e) => { const a = e.target.closest('.cite'); if (a) { openPage(a.dataset.doc); location.hash = '#/pages'; } });
+
+    const bubble = (m) => {
+      if (m.role === 'user') return h('div', { class: 'msg me' }, h('div', { class: 'b' }, m.content));
+      const used = [];
+      for (const p of m.pages || []) used.push(h('a', { class: 'chip', onclick: () => { openPage(p.id); location.hash = '#/pages'; } }, (p.icon || '📄') + ' ' + p.title));
+      if (m.finance) used.push(h('a', { class: 'chip', href: '#/finance' }, '💰 Finance'));
+      return h('div', { class: 'msg ai' + (m.err ? ' err' : '') }, h('div', { class: 'av' }, ic('bot')), h('div', { class: 'b' }, h('div', { class: 'mdx', html: md(m.content, m.pages) }),
+        used.length ? h('div', { class: 'used' }, h('span', { class: 'faint' }, 'Looked at:'), used) : null,
+        m.model ? h('div', { class: 'faint', style: 'margin-top:6px' }, m.model) : null));
+    };
+    const empty = () => h('div', { class: 'askempty' }, h('div', { class: 'soonbox', style: 'padding:40px 10px' }, h('div', { class: 'ic' }, ic('bot')), h('h1', {}, 'Ask AI'),
+      h('p', { class: 'sub', style: 'max-width:480px;margin:8px auto 18px' }, 'Chat with ChatGPT on your own plan. It can also look in your Pages and Finance when the question is about them.'),
+      h('div', { class: 'row', style: 'justify-content:center' }, ['Is mahine maine kis cheez pe sab se zyada kharch kiya?', 'Meri pages me ideas ka summary do', 'Kal ke liye ek plan bana do'].map(t =>
+        h('button', { class: 'btn', onclick: () => { input.value = t; go(); } }, t)))));
+    async function loadList() {
+      let rows = []; try { rows = await ai('chats'); } catch (e) { /* shown on send */ }
+      list.replaceChildren(...rows.map(r => h('div', { class: 'chatitem' + (cur && cur.id === r.id ? ' on' : ''), onclick: () => open(r.id) },
+        h('span', {}, r.title || 'Chat'),
+        h('button', { class: 'x', title: 'Delete chat', onclick: async (e) => { e.stopPropagation(); if (!confirm('Delete this chat?')) return; await ai('delete', { id: r.id }); if (cur && cur.id === r.id) open(null); else loadList(); } }, '×'))));
+      if (!rows.length) list.append(h('p', { class: 'faint', style: 'padding:10px' }, 'Your chats are saved here.'));
+    }
+    async function open(id) {
+      cur = id ? await ai('chat', { id }) : null;
+      log.replaceChildren(...(cur && cur.msgs.length ? cur.msgs.map(bubble) : [empty()]));
+      log.scrollTop = log.scrollHeight; loadList(); input.focus();
+    }
+    async function checkStatus() {
+      try { status = (await ai('settings')).chatgpt; } catch (e) { status = { state: 'none' }; }
+      banner.replaceChildren(status.state === 'ready' ? '' : h('div', { class: 'askwarn' }, h('span', {}, 'ChatGPT is not connected yet.'), h('a', { class: 'btn primary', href: '#/settings', onclick: () => setTimeout(() => { const c = document.getElementById('aicard'); if (c) c.scrollIntoView({ behavior: 'smooth' }); }, 60) }, 'Connect in Settings')));
+      modelTag.textContent = status.state === 'ready' ? 'ChatGPT' + (status.model ? ' · ' + status.model : '') + (status.email ? ' · ' + status.email : '') : '';
+    }
+    async function go() {
+      const text = input.value.trim(); if (!text || busy) return;
+      busy = true; send.disabled = true; input.value = ''; input.style.height = 'auto';
+      if (!cur) { log.replaceChildren(); cur = { id: null, msgs: [] }; }
+      log.append(bubble({ role: 'user', content: text }));
+      const wait = h('div', { class: 'msg ai' }, h('div', { class: 'av' }, ic('bot')), h('div', { class: 'b' }, h('span', { class: 'dots' }, h('i'), h('i'), h('i'))));
+      log.append(wait); log.scrollTop = log.scrollHeight;
+      try {
+        const r = await ai('ask', { id: cur.id, text });
+        cur.id = r.id; wait.replaceWith(bubble(r.msg)); loadList();
+      } catch (e) { wait.replaceWith(bubble({ role: 'assistant', content: e.message, err: true })); input.value = text; if (/connect|sign in/i.test(e.message)) checkStatus(); }
+      busy = false; send.disabled = false; log.scrollTop = log.scrollHeight; input.focus();
+    }
+    checkStatus(); open(null);
+    window.addEventListener('hashchange', () => { if (location.hash === '#/ask') checkStatus(); });
   }
 
   // ── start ──
