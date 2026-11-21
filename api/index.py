@@ -78,6 +78,15 @@ def app(env, start):
             return redirect(nxt, [_cookie(auth.COOKIE, sess, auth.DAYS * 86400, secure), _cookie(auth.STATE, '', 0, secure)])
         if path == '/auth/logout': return redirect('/login.html?out=1', [_cookie(auth.COOKIE, '', 0, secure)])
 
+        if path in ('/desktop/status', '/desktop/pull'):
+            # the desktop app's "Update from web": a desktop key (Settings › Connect desktop), read-only
+            import desktop
+            if not desktop.check(env): return send('401 Unauthorized', {'error': 'This desktop key is not valid any more. Make a new one in Curio Web › Settings › Connect desktop.'})
+            if path == '/desktop/status': return send('200 OK', desktop.status())
+            data = desktop.pull(r.q.get('part', ''))
+            start('200 OK', headers + [('Content-Type', 'application/json; charset=utf-8'), ('Content-Encoding', 'gzip'), ('Content-Length', str(len(data)))])
+            return [data]
+
         # ── signed in only ──
         u = auth.user(r.cookies)
         if path == '/me':
@@ -114,6 +123,11 @@ def app(env, start):
             b = r.json()
             try: return send('200 OK', {'ok': True, 'data': ai.call(b.get('op'), b.get('args') or {})})
             except (ValueError, KeyError, tdb.Conflict) as e: return send('200 OK', {'error': str(e) if not isinstance(e, KeyError) else f'Missing: {e}'})
+        if path == '/desktop':
+            import desktop
+            b = r.json()
+            try: return send('200 OK', {'ok': True, 'data': desktop.call(b.get('op'), b.get('args') or {})})
+            except (ValueError, KeyError) as e: return send('200 OK', {'error': str(e) if not isinstance(e, KeyError) else f'Missing: {e}'})
         if path == '/pages/rpc':
             import pages
             pages.USER['name'] = u.get('name') or 'You'

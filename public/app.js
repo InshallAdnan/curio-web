@@ -149,7 +149,7 @@
   // ── Settings + import ──
   function renderSettings(v) {
     v.replaceChildren(h('div', { class: 'page fade' }, h('h1', {}, 'Settings'), h('p', { class: 'sub' }, 'Curio on the web — your Pages and Finance, from any device.'),
-      h('div', { class: 'grid', style: 'grid-template-columns:1fr' }, aiCard(), storageCard(), importCard(), themeCard(), accountCard())));
+      h('div', { class: 'grid', style: 'grid-template-columns:1fr' }, aiCard(), storageCard(), desktopCard(), importCard(), themeCard(), accountCard())));
   }
   function storageCard() {
     const st = h('span', { class: 'pill' }, 'checking…');
@@ -161,6 +161,45 @@
         h('div', {}, h('b', {}, 'Vercel'), h('span', { class: 'muted' }, ' — runs the app; it keeps no data itself.')),
         h('div', {}, h('b', {}, 'Google'), h('span', { class: 'muted' }, ' — only checks it is you when you sign in.'))),
       h('p', { class: 'faint', style: 'margin-top:10px' }, 'Backups: Finance › Settings › Download finance.db (opens in the desktop app) or CSV · Pages › ⋯ › Import & export. The desktop app keeps its own data on your PC, separate from this.'));
+  }
+  // ── Connect desktop: a read-only key the desktop app uses for "Update from web" ──
+  function desktopCard() {
+    const dk = async (op, args = {}) => (await post('/api/desktop', { op, args })).data;
+    const pill = h('span', { class: 'pill' }, '…');
+    const list = h('div', { class: 'links', style: 'margin-top:12px' });
+    const fresh = h('div');
+    const name = h('input', { class: 'inp', type: 'text', placeholder: 'Name, e.g. Home PC', maxlength: '40', autocomplete: 'off', style: 'flex:1;min-width:160px' });
+    const make = h('button', { class: 'btn primary', onclick: async () => {
+      make.disabled = true;
+      try {
+        const k = await dk('create', { name: name.value || 'Desktop' }); name.value = '';
+        const box = h('code', { style: 'display:block;padding:10px 12px;border-radius:10px;background:var(--hover, rgba(127,127,127,.12));word-break:break-all;user-select:all;margin-top:8px' }, k.key);
+        const copy = h('button', { class: 'btn', onclick: async () => { try { await navigator.clipboard.writeText(k.key); toast('Key copied'); } catch (e) { toast('Select the key and copy it'); } } }, 'Copy key');
+        fresh.replaceChildren(h('div', { class: 'card', style: 'margin-top:12px;border-color:var(--accent, #f2602d)' },
+          h('b', {}, `Key for “${k.name}”`), box,
+          h('div', { class: 'row', style: 'margin-top:10px' }, copy, h('button', { class: 'btn', onclick: () => fresh.replaceChildren() }, 'Done')),
+          h('p', { class: 'faint', style: 'margin-top:8px' }, 'Shown only this once. In the desktop app: Settings › Curio Web › paste the key › Save. It can only read your data, never change it.')));
+        draw();
+      } catch (e) { toast(e.message); }
+      make.disabled = false;
+    } }, 'Make a desktop key');
+    const when = (t) => t ? new Date(t * 1000).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : 'never';
+    async function draw() {
+      let ks;
+      try { ks = await dk('keys'); } catch (e) { list.replaceChildren(h('p', { style: 'color:var(--expense)' }, e.message)); return; }
+      pill.textContent = ks.length ? (ks.length === 1 ? '1 desktop' : ks.length + ' desktops') : 'Not connected';
+      pill.className = 'pill ' + (ks.length ? 'ok' : 'warn');
+      list.replaceChildren(...ks.map(k => h('div', { class: 'row', style: 'justify-content:space-between;gap:10px' },
+        h('div', {}, h('b', {}, k.name), h('span', { class: 'muted' }, ` · made ${when(k.created)} · last update ${when(k.last_used)}`)),
+        h('button', { class: 'btn', onclick: async () => {
+          if (!confirm(`Remove the key “${k.name}”? That desktop can no longer update from the web until you give it a new key.`)) return;
+          try { await dk('revoke', { id: k.id }); toast('Key removed'); draw(); } catch (e) { toast(e.message); }
+        } }, 'Remove'))));
+    }
+    draw();
+    return h('div', { class: 'card' }, h('div', { class: 'row' }, h('h3', { style: 'margin:0' }, 'Connect desktop'), pill),
+      h('p', { style: 'margin-top:8px' }, 'The web is the original. Your desktop app copies Pages, Finance and Calendar from here when you press “Update from web” — it never changes anything here.'),
+      h('div', { class: 'row', style: 'margin-top:12px;gap:8px' }, name, make), fresh, list);
   }
   function themeCard() {
     const cur = localStorage.getItem('curio-theme') || 'system';
