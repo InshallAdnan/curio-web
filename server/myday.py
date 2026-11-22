@@ -151,7 +151,7 @@ def _copy_before_upgrade(p):
 
 
 def _first_areas(c):
-    for i, n in enumerate(['Responsibilities', 'Self-Improve', 'Skill Learn', 'Health', 'Deen']):
+    for i, n in enumerate(['Responsibilities', 'Self-Improve', 'Skill Learn', 'Deen']):
         c.execute('INSERT INTO areas(name, color, sort) VALUES(?,?,?)', (n, AREA_COLORS[i], i))
 
 

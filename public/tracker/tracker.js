@@ -55,6 +55,10 @@
   // ── Home ──
   V.home = async (p) => {
     const d = await api('home'); const hr = new Date().getHours();
+    if (d.empty) { p.replaceChildren(h('div', { class: 'card' }, h('h3', {}, 'Your Tracker on the web is empty'),
+      h('p', { class: 'muted' }, 'The web is where your Tracker lives from now on; the desktop app copies it with “Update from web”. Bring your desktop data here once — or start fresh.'),
+      h('div', { class: 'row', style: { flexWrap: 'wrap' } }, h('button', { class: 'btn primary', onclick: () => { cur = 'phone'; location.hash = 'phone'; nav(); draw(); } }, 'Copy my desktop Tracker here'),
+        h('button', { class: 'btn', onclick: () => taskForm({ day: iso(new Date()) }) }, '+ Task'), h('button', { class: 'btn', onclick: () => { cur = 'checkins'; location.hash = 'checkins'; nav(); draw(); } }, '+ Check-in item')))); return; }
     const greet = hr < 5 ? 'LATE NIGHT' : hr < 12 ? 'GOOD MORNING' : hr < 17 ? 'GOOD AFTERNOON' : hr < 21 ? 'GOOD EVENING' : 'GOOD NIGHT';
     const left = d.total - d.done; const nxt = d.timeline.filter(x => x.state === 'upcoming' && x.time);
     const pct = d.total ? Math.round(100 * d.done / d.total) : 0;
@@ -114,12 +118,31 @@
       if (!d[k].length && k !== 'today') continue;
       els.push(h('div', { class: 'card' }, h('h3', {}, t, h('span', { class: 'muted' }, d[k].length || '')), ...(d[k].length ? d[k].map(x => row(x, k !== 'today')) : [h('div', { class: 'empty' }, 'Nothing for today.')])));
     }
+    els.push(h('div', { class: 'row', style: { margin: '-4px 0 10px' } }, h('div', { class: 'grow' }), h('button', { class: 'btn sm', onclick: () => repForm() }, '+ Repeating task')));
     if (d.repeating.length) els.push(h('div', { class: 'card' }, h('h3', {}, 'Repeating'), ...d.repeating.map(x => h('div', { class: 'item' }, h('div', { class: 't' }, h('b', {}, x.title), h('small', {}, `${x.rule} · done ${x.done}×` + (x.next ? ' · next ' + dayLab(x.next) : ''))),
-      h('span', { class: 'pill', style: { '--c': x.state === 'running' ? 'var(--good)' : x.state === 'ending' ? 'var(--poor)' : 'var(--bad)' } }, x.state)))));
+      h('span', { class: 'pill', style: { '--c': x.state === 'running' ? 'var(--good)' : x.state === 'ending' ? 'var(--poor)' : 'var(--bad)' } }, x.state),
+      x.state === 'running' || x.state === 'ending' ? h('button', { class: 'btn sm', onclick: () => confirm(`Stop “${x.title}”? Its history stays.`) && act('stop_series', { id: x.id }, 'Stopped') }, 'Stop')
+        : h('button', { class: 'btn sm', onclick: () => act('restart_series', { id: x.id }, 'Restarted') }, 'Restart')))));
     if (d.done.length) els.push(h('div', { class: 'card' }, h('h3', {}, 'Done lately'), ...d.done.slice(0, 10).map(x => row(x, true))));
     p.replaceChildren(...els);
   };
   const endOf = (x) => { if (!x.time) return ''; const [a, b] = x.time.split(':').map(Number); const e = a * 60 + b + (x.minutes || 30); return `${pad(Math.floor(e / 60) % 24)}:${pad(e % 60)}`; };
+  async function repForm() {
+    if (!AREAS.length) AREAS = (await api('tasks')).areas;
+    const title = inp('', 'e.g. Hair oiling'); let area = (AREAS[0] || {}).id; let days = [new Date().getDay() === 0 ? 6 : new Date().getDay() - 1];
+    const chips = h('div', { class: 'chips' }, AREAS.map(a => { const b = h('button', { class: a.id === area ? 'on' : '', style: { '--c': a.color }, onclick: () => { area = a.id; chips.querySelectorAll('button').forEach(z => z.classList.toggle('on', z === b)); } }, a.name); return b; }));
+    const every = h('select', { class: 'inp' }, [['day', 'Every day'], ['weekdays', 'Weekdays'], ['week', 'Every week on…'], ['month', 'Every month']].map(([k, t]) => h('option', { value: k }, t)));
+    const dchips = h('div', { class: 'chips' }, DOW.map((t, i) => { const b = h('button', { class: days.includes(i) ? 'on' : '', onclick: () => { days = days.includes(i) ? days.filter(z => z !== i) : [...days, i]; b.classList.toggle('on'); } }, t); return b; }));
+    const st = inp('', '', 'time'), en = inp('', '', 'time'), start = inp(iso(new Date()), '', 'date'), end = inp('', '', 'date');
+    sheet('New repeating task', h('div', {}, field('Task', title), field('Board', chips), field('Repeat', every), field('On (for “every week”)', dchips), field('Starts', start),
+      h('div', { class: 'grid2' }, field('From', st), field('To', en)), field('Ends (empty = keeps repeating)', end)),
+      [['Save', 'primary', async () => {
+        const k = every.value; const rep = k === 'day' ? { every: 'day', n: 1 } : k === 'weekdays' ? { every: 'week', n: 1, days: [0, 1, 2, 3, 4] } : k === 'week' ? { every: 'week', n: 1, days: days.sort() } : { every: 'month', n: 1 };
+        let m = 30; if (st.value && en.value) { const [a, b] = st.value.split(':').map(Number), [c, e] = en.value.split(':').map(Number); m = (c * 60 + e) - (a * 60 + b); if (m <= 0) m += 1440; }
+        try { await api('task_save', { task: { title: title.value, area_id: area, day: start.value, time: st.value || null, minutes: m, repeat: rep, repeat_end: end.value || null, remind: st.value ? 10 : -1 } }); toast('Saved'); draw(); }
+        catch (e) { toast(e.message); return false; }
+      }]]);
+  }
   async function taskForm(x) {
     if (!AREAS.length) AREAS = (await api('tasks')).areas;
     const title = inp(x.title, 'What needs doing?'); let area = x.area_id || (AREAS[0] || {}).id;
@@ -143,16 +166,42 @@
     const d = await api('checkins'); const els = [];
     const groups = routine ? [...d.order.filter(k => d.groups[k]), ...Object.keys(d.groups).filter(k => k && !d.order.includes(k))] : [''];
     for (const g of groups) {
-      const items = d.groups[g] || []; const c = d.colors[g] || 'var(--accent)'; if (!routine && !items.length) { els.push(h('div', { class: 'card empty' }, 'No habits yet.')); continue; }
-      els.push(h('div', { class: 'card' }, h('h3', { style: { color: c } }, g || 'Habits', h('span', { class: 'sp' }), h('span', { class: 'muted', style: { fontSize: '13px' } }, `${items.filter(x => x.state === 'done').length}/${items.filter(x => x.due).length} today`)),
-        ...items.map(x => h('div', { class: 'item' + (x.state === 'done' ? ' done' : '') }, chk(x.state === 'done', c, (on) => act('habit_log', { id: x.id, state: on ? 'done' : null })),
+      const items = d.groups[g] || []; const c = d.colors[g] || 'var(--accent)';
+      if (!routine && !items.length) { els.push(h('div', { class: 'card' }, h('div', { class: 'empty' }, 'No habits yet.'), h('button', { class: 'btn primary', onclick: () => habitForm({ routine: '' }, d) }, '+ Habit'))); continue; }
+      els.push(h('div', { class: 'card' }, h('h3', { style: { color: c } }, g || 'Habits', h('span', { class: 'sp' }), h('span', { class: 'muted', style: { fontSize: '13px' } }, `${items.filter(x => x.state === 'done').length}/${items.filter(x => x.due).length} today`),
+          h('button', { class: 'btn sm', onclick: () => habitForm({ routine: g }, d) }, '+')),
+        ...items.map(x => h('div', { class: 'item' + (x.state === 'done' ? ' done' : ''), onclick: () => habitForm(x, d) }, chk(x.state === 'done', c, (on) => act('habit_log', { id: x.id, state: on ? 'done' : null })),
           h('div', { class: 't' }, h('b', {}, x.name), h('small', {}, [t12(x.time), x.streak ? `${x.streak} day streak` : '', `${x.pct}% · 30 days`].filter(Boolean).join('  ·  '))),
           h('div', { class: 'dots' }, x.week.map(([day, s]) => h('div', { class: 'dot ' + s, style: { '--c': c }, title: day })))))));
     }
     if (d.changes.length) els.push(h('div', { class: 'card' }, h('h3', {}, 'Changes'), ...d.changes.map(x => h('div', { class: 'item' }, h('span', { class: 'pill', style: { '--c': x.color } }, x.what),
       h('div', { class: 't' }, h('b', {}, x.name), h('small', {}, `${dayLab(x.day)} · ${x.detail}`))))));
-    els.push(h('div', { class: 'faint' }, 'Add, change or stop items in the desktop app (Tracker › Check-ins / Habits) — they show here at once.'));
+    if (routine) els.unshift(h('div', { class: 'row', style: { marginBottom: '10px' } }, h('div', { class: 'grow muted' }, 'Tap an item to change or stop it.'), h('button', { class: 'btn primary', onclick: () => habitForm({ routine: 'Morning' }, d) }, '+ Item')));
+    const st = (d.stopped || []).filter(x => routine ? x.routine : !x.routine);
+    if (st.length) els.push(h('div', { class: 'card' }, h('h3', {}, routine ? 'Removed items' : 'Stopped habits'), ...st.map(x => h('div', { class: 'item' }, h('div', { class: 't' }, h('b', {}, x.name), h('small', {}, x.last ? 'stopped ' + dayLab(x.last) : '')),
+      h('button', { class: 'btn sm', onclick: () => act('habit_restart', { id: x.id }, 'Back from today') }, 'Restart')))));
     p.replaceChildren(...els);
+  }
+  const DOW = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'];
+  async function habitForm(x, d) {
+    if (!AREAS.length) AREAS = (await api('tasks')).areas;
+    const isRt = x.routine !== '' && x.routine != null;
+    const name = inp(x.name, isRt ? 'e.g. Fajr, Skincare, Check Gmail' : 'e.g. Read 20 pages');
+    const rt = h('select', { class: 'inp' }, [...new Set([...(d.order || []), ...(x.routine ? [x.routine] : [])])].map(r => h('option', { value: r, selected: r === x.routine }, r)));
+    let days = (x.days && x.days.length ? x.days : [0, 1, 2, 3, 4, 5, 6]).slice();
+    const dchips = h('div', { class: 'chips' }, DOW.map((t, i) => { const b = h('button', { class: days.includes(i) ? 'on' : '', onclick: () => { days = days.includes(i) ? days.filter(z => z !== i) : [...days, i]; b.classList.toggle('on'); } }, t); return b; }));
+    const tm = inp(x.time || '', '', 'time'); const rem = h('input', { type: 'checkbox', checked: x.id ? (x.remind ?? -1) >= 0 : true });
+    let area = x.area_id || (AREAS[0] || {}).id;
+    const chips = h('div', { class: 'chips' }, AREAS.map(a => { const b = h('button', { class: a.id === area ? 'on' : '', style: { '--c': a.color }, onclick: () => { area = a.id; chips.querySelectorAll('button').forEach(z => z.classList.toggle('on', z === b)); } }, a.name); return b; }));
+    const from = inp(iso(new Date()), '', 'date');
+    const body = h('div', {}, field('Name', name), isRt ? field('Check-in', rt) : null, field('Days', dchips), field('Time', tm), h('label', { class: 'item' }, rem, h('span', {}, 'Remind me at this time (phone and PC)')),
+      field('Board', chips), x.id ? field('Changes start on (earlier days keep the old plan)', from) : null);
+    const btns = [['Save', 'primary', async () => {
+      try { await api('habit_save', { habit: { id: x.id, name: name.value, routine: isRt ? rt.value : '', days: days.sort(), time: tm.value || null, remind: rem.checked && tm.value ? 0 : -1, area_id: area, kind: 'build' }, from_day: x.id ? from.value : null }); toast('Saved'); draw(); }
+      catch (e) { toast(e.message); return false; }
+    }]];
+    if (x.id) btns.unshift(['Stop it', 'danger', () => confirm(`Stop “${x.name}” from today? Its history stays.`) ? act('habit_end', { id: x.id }, 'Stopped') : false]);
+    sheet(x.id ? 'Edit' : isRt ? 'New check-in item' : 'New habit', body, btns);
   }
   V.checkins = (p) => habitsView(p, true);
   V.habits = (p) => habitsView(p, false);
@@ -187,10 +236,10 @@
 
   // ── NoFap ──
   V.quit = async (p) => {
-    const qs = await api('quit'); if (!qs.length) { p.replaceChildren(h('div', { class: 'card empty' }, 'Nothing to quit yet — add it in the desktop app.')); return; }
-    const els = [];
+    const qs = await api('quit'); const els = [h('div', { class: 'row', style: { marginBottom: '10px' } }, h('div', { class: 'grow' }), h('button', { class: 'btn', onclick: () => quitForm({}) }, '+ Something to quit'))];
+    if (!qs.length) els.push(h('div', { class: 'card empty' }, 'Nothing here yet.'));
     for (const q of qs) {
-      els.push(h('div', { class: 'card' }, h('h3', {}, q.name), h('div', { class: 'row' }, h('div', { class: 'big', style: { fontSize: '46px' } }, q.days), h('div', { class: 'muted' }, `days clean + ${q.hours} h`, h('br'), `best ${q.best} · ${q.beaten} urges beaten · ${q.relapses} slips`)),
+      els.push(h('div', { class: 'card' }, h('h3', {}, q.name, h('span', { class: 'sp' }), h('button', { class: 'btn sm', onclick: () => quitForm(q) }, 'Edit')), h('div', { class: 'row' }, h('div', { class: 'big', style: { fontSize: '46px' } }, q.days), h('div', { class: 'muted' }, `days clean + ${q.hours} h`, h('br'), `best ${q.best} · ${q.beaten} urges beaten · ${q.relapses} slips`)),
         h('div', { class: 'row', style: { marginTop: '10px', flexWrap: 'wrap' } }, h('button', { class: 'btn primary', style: { flex: 1 }, onclick: () => struggle(q.id, q) }, 'I’m struggling'),
           h('button', { class: 'btn', onclick: () => urgeForm(q.id) }, 'Log urge'), h('button', { class: 'btn', onclick: () => slipped(q.id, q.name) }, 'I slipped'))));
       if (q.why) els.push(h('div', { class: 'card' }, h('h3', {}, 'Why I’m doing this'), ...q.why.split('\n').filter(Boolean).map(l => h('div', {}, '•  ' + l))));
@@ -198,6 +247,12 @@
     }
     p.replaceChildren(...els);
   };
+  function quitForm(q) {
+    const name = inp(q.name, 'e.g. NoFap, Smoking'); const why = h('textarea', { class: 'inp', rows: 4, placeholder: 'Why you are doing this — one reason per line' }, q.why || '');
+    const since = inp(q.id ? String(q.since || '').slice(0, 10) : iso(new Date()), '', 'date');
+    sheet(q.id ? 'Edit' : 'Something to quit', h('div', {}, field('Name', name), field('My reasons', why), q.id ? null : field('Clean since', since)),
+      [['Save', 'primary', () => act('quit_save', { id: q.id, name: name.value, why: why.value, start_day: q.id ? undefined : since.value }, 'Saved')]]);
+  }
   async function struggle(id, q) {
     q = q || (await api('quit')).find(x => x.id === id) || {};
     let left = 600; const clock = h('div', { class: 'timer' }, '10:00');

@@ -2,12 +2,12 @@
 
 You make a desktop key here (Settings › Connect desktop) and paste it into the desktop app once. The key can only READ:
   GET /api/desktop/status          → how much is here and a change number per part (cheap; the desktop checks it at start)
-  GET /api/desktop/pull?part=…     → every row of Finance ('finance') or Pages ('pages'), gzip'd JSON
+  GET /api/desktop/pull?part=…     → every row of Finance ('finance'), Pages ('pages') or Tracker ('tracker'), gzip'd JSON
   (pictures come from the existing GET /api/file/<id>)
 Only a SHA-256 of each key is kept (table desktop_keys); the key itself is shown once. Revoke it any time."""
 import base64, gzip, hashlib, json, re, secrets, time
 
-import tdb, fin, pages
+import tdb, fin, pages, tracker
 
 PREFIX = 'cdk_'
 _READY = [False]
@@ -62,9 +62,9 @@ def check(env):
 
 
 def _revs():
-    try: res = tdb.remote().run([("SELECT name, rev FROM _rev WHERE name IN ('finance','pages')", ())])[0].rows
+    try: res = tdb.remote().run([("SELECT name, rev FROM _rev WHERE name IN ('finance','pages','tracker')", ())])[0].rows
     except Exception: res = []
-    out = {'finance': 0, 'pages': 0}; out.update({n: r for n, r in res}); return out
+    out = {'finance': 0, 'pages': 0, 'tracker': 0}; out.update({n: r for n, r in res}); return out
 
 
 def _dump(con, tables):
@@ -93,6 +93,8 @@ def status():
                 'databases': c.execute('SELECT COUNT(*) FROM dbs').fetchone()[0],
                 'last_edit': c.execute('SELECT MAX(updated) FROM docs').fetchone()[0]}
     counts = fin.run(f); counts.update(pages.run(p))
+    try: counts.update({'tracker_' + k: v for k, v in tracker.call('stats', {}).items()})
+    except Exception: pass
     return {'ok': True, 'app': 'Curio Web', 'version': 1, 'rev': _revs(), 'counts': counts, 'time': time.time()}
 
 
@@ -117,7 +119,12 @@ def pull(part):
                 chunk = ids[i:i + 80]
                 files += pages.direct([('SELECT id, name, mime, size FROM files WHERE id IN (%s)' % ','.join('?' * len(chunk)), tuple(chunk))])[0].dicts()
         body = {'ok': True, 'part': 'pages', 'rev': rev['pages'], 'tables': data, 'files': files}
+    elif part == 'tracker':
+        # the Tracker book, table names as on the desktop (without md_); the screen record (activity) stays on each PC
+        names = [n for n in tracker.NAMES if n != 'activity']
+        data = tracker.run(lambda c: _dump(c._c, [tracker.PFX + n for n in names]))
+        body = {'ok': True, 'part': 'tracker', 'rev': rev['tracker'], 'tables': {k[len(tracker.PFX):]: v for k, v in data.items()}}
     else:
-        raise ValueError('part must be finance or pages')
+        raise ValueError('part must be finance, pages or tracker')
     return gzip.compress(json.dumps(body, ensure_ascii=False, separators=(',', ':')).encode('utf-8'), 6)
 

@@ -83,6 +83,8 @@ def _quit(c, h):
 
 # ───────────────────────── calls ─────────────────────────
 def home(c, a):
+    try: M.ensure_recent_nights(c)                                  # a night of sleep from your usual times, when the desktop did not fill it
+    except Exception: pass
     t = M.today(); s = M.today_summary(c); ar = {x['id']: x for x in M.areas(c, True)}
     tl = M.timeline(c, t)
     sl = M.sleeps(c, 1); q = M.habits(c, 'quit')
@@ -90,7 +92,8 @@ def home(c, a):
     week = {M.iso(d): [] for d in days}
     for x in M.tasks(c):
         if x['day'] in week: week[x['day']].append(dict(id=x['id'], title=x['title'], time=x['time'], done=bool(x['done_at']), color=(ar.get(x['area_id']) or {}).get('color')))
-    return dict(total=s['total'], done=s['done'], timeline=[x for x in tl if x['kind'] != 'quit'], routines=M.routines_today(c), top3=[dict(id=x['id'], title=x['title'], done=bool(x['done_at'])) for x in M.top3(c)],
+    empty = not c.execute('SELECT 1 FROM tasks LIMIT 1').fetchone() and not c.execute('SELECT 1 FROM habits LIMIT 1').fetchone()
+    return dict(empty=empty, total=s['total'], done=s['done'], timeline=[x for x in tl if x['kind'] != 'quit'], routines=M.routines_today(c), top3=[dict(id=x['id'], title=x['title'], done=bool(x['done_at'])) for x in M.top3(c)],
                 sleep=_sleep_row(c, sl[0]) if sl else None, quit=[dict(id=h['id'], name=h['name'], days=M.quit_stats(c, h)['days'], best=M.quit_stats(c, h)['best']) for h in q],
                 week=week, colors=M.ROUTINE_COLORS, areas=[dict(id=x['id'], name=x['name'], color=x['color']) for x in M.areas(c)])
 
@@ -170,6 +173,8 @@ def habit_save(c, a):
 
 
 def sleep_view(c, a):
+    try: M.ensure_recent_nights(c)
+    except Exception: pass
     mode = a.get('mode', 'week'); off = int(a.get('off') or 0); t0 = M.today()
     if mode == 'month':
         import calendar as _c
@@ -211,6 +216,8 @@ OPS = {
     'sleep_usual': lambda c, a: [M.set_setting(c, k, str(a[v])) for k, v in (('sleep_usual_bed', 'bed'), ('bed_goal', 'bed'), ('sleep_usual_wake', 'wake'), ('wake_goal', 'wake'),
                                                                             ('sleep_goal', 'goal')) if a.get(v) is not None],
     'quit': lambda c, a: [_quit(c, h) for h in M.habits(c, 'quit')],
+    'quit_save': lambda c, a: M.save_habit(c, dict(M.habit(c, int(a['id'])) if a.get('id') else {}, kind='quit', name=a['name'], why=a.get('why', ''), routine='',
+                                                   days=list(range(7)), time=a.get('time') or '00:15', remind=0, start_day=a.get('start_day') or M.iso(M.today()))),
     'quit_log': lambda c, a: M.log_quit(c, int(a['id']), a['kind'], a.get('trigger', ''), a.get('helped', ''), a.get('note', ''),
                                         datetime.fromisoformat(a['when'][:16]) if a.get('when') else None),
     'nudges': lambda c, a: M.nudges(c),
