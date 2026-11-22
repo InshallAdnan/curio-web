@@ -67,15 +67,15 @@
 
   // ── events ──
   function norm(e) {
-    const isPage = String(e.source).startsWith('page:');
-    const allDay = !isPage || !!e.all_day;
-    const start = isPage ? parse(e.start) : parse(e.date);
+    const isPage = String(e.source).startsWith('page:'), isMd = e.source === 'myday';     // Tracker: tasks, sleep, focus
+    const allDay = !(isPage || isMd) || !!e.all_day;
+    const start = (isPage || isMd) ? parse(e.start) : parse(e.date);
     let end = e.end ? parse(e.end) : null;
     if (!end) end = allDay ? start : new Date(start.getTime() + 3600e3);
-    const ink = isPage ? e.ink : (SRC_INK[e.source] || '#64748b');
-    const bg = dark() ? ink + '33' : (isPage ? e.color : ink + '14');
-    const movable = isPage || ['income', 'expense', 'transfer'].includes(e.source);
-    return Object.assign({}, e, { isPage, allDay, s: start, e: end, ink, bg, movable });
+    const ink = (isPage || isMd) ? e.ink : (SRC_INK[e.source] || '#64748b');
+    const bg = dark() ? ink + '33' : (isPage ? e.color : isMd ? ink + '22' : ink + '14');
+    const movable = isPage || isMd || ['income', 'expense', 'transfer'].includes(e.source);
+    return Object.assign({}, e, { isPage, isMd, allDay, s: start, e: end, ink, bg, movable });
   }
   let EV = [];
   const dayEvents = (d) => EV.filter(e => e.allDay ? (startOfDay(e.s) <= d && d <= startOfDay(e.e)) : sameDay(e.s, d));
@@ -183,7 +183,7 @@
       timed.forEach((e, i) => {
         const top = (e.s.getHours() * 60 + e.s.getMinutes()) / 60 * HOUR, mins = Math.max(20, (e.e - e.s) / 6e4);
         const el = h('div', { class: 'ev' + (S.sel === e.id ? ' sel' : ''), 'data-id': e.id, style: { '--ink': e.ink, '--bgc': e.bg, top: top + 'px', height: Math.max(20, mins / 60 * HOUR - 2) + 'px', left: `calc(${lanes[i] / n * 100}% + 2px)`, width: `calc(${100 / n}% - 4px)` } },
-          h('b', {}, (e.icon && e.icon.length <= 2 ? e.icon + ' ' : '') + e.title), h('small', {}, `${ampm(e.s)} – ${ampm(e.e)}`), e.isPage ? h('div', { class: 'rz' }) : null);
+          h('b', {}, (e.icon && e.icon.length <= 2 ? e.icon + ' ' : '') + e.title), h('small', {}, `${ampm(e.s)} – ${ampm(e.e)}`), e.isMd ? h('div', { class: 'rz rzt' }) : null, (e.isPage || e.isMd) ? h('div', { class: 'rz' }) : null);
         attachDrag(el, e); col.append(el);
       });
       if (sameDay(d, today)) col.append(h('div', { class: 'now', style: { top: (today.getHours() * 60 + today.getMinutes()) / 60 * HOUR + 'px' } }));
@@ -215,7 +215,7 @@
     el.addEventListener('pointerdown', (ev) => {
       if (ev.button !== 0 || !e.movable) return;
       ev.stopPropagation();
-      const resize = ev.target.classList.contains('rz');
+      const resize = ev.target.classList.contains('rz'), top = ev.target.classList.contains('rzt');
       const sx = ev.clientX, sy = ev.clientY; let moved = false, target = null, ghost = null;
       const timed = !e.allDay && el.classList.contains('ev');
       const onMove = (m) => {
@@ -228,7 +228,9 @@
           let mins = Math.round(((m.clientY - r.top) / HOUR * 60 - (resize ? 0 : ((sy - el.getBoundingClientRect().top) / HOUR * 60))) / 15) * 15;
           if (!ghost) { ghost = el.cloneNode(true); ghost.classList.add('ghost'); el.style.opacity = .35; }
           const day = parse(col.dataset.date);
-          if (resize) { const end = new Date(startOfDay(e.s).getTime() + Math.max((e.s - startOfDay(e.s)) / 6e4 + 15, mins) * 6e4); target = { start: e.s, end };
+          if (top) { const start = new Date(day.getTime() + Math.max(0, Math.min(mins, (e.e - day) / 6e4 - 15)) * 6e4); target = { start, end: e.e };
+            ghost.style.top = (start - day) / 36e5 * HOUR + 'px'; ghost.style.height = Math.max(20, (e.e - start) / 36e5 * HOUR - 2) + 'px'; if (ghost.parentNode !== el.parentNode) el.parentNode.append(ghost); }
+          else if (resize) { const end = new Date(startOfDay(e.s).getTime() + Math.max((e.s - startOfDay(e.s)) / 6e4 + 15, mins) * 6e4); target = { start: e.s, end };
             ghost.style.height = Math.max(20, (end - e.s) / 36e5 * HOUR - 2) + 'px'; if (ghost.parentNode !== el.parentNode) el.parentNode.append(ghost); }
           else { mins = Math.max(0, Math.min(24 * 60 - 15, mins)); const start = new Date(day.getTime() + mins * 6e4); target = { start, end: new Date(start.getTime() + dur) };
             ghost.style.top = mins / 60 * HOUR + 'px'; ghost.style.left = '2px'; ghost.style.width = 'calc(100% - 4px)'; if (ghost.parentNode !== col) col.append(ghost); }
@@ -254,7 +256,8 @@
     const allDay = e.allDay;
     const fmt = (d) => allDay ? ymd(d) : ymdhm(d);
     try {
-      await cal('move', { source: e.source, record_id: e.record_id, prop_id: e.prop_id, start: fmt(start), end: e.isPage && end && +end !== +start ? fmt(end) : null, all_day: allDay });
+      if (e.isMd) await cal('move', { source: 'myday', kind: e.mkind, id: e.mid, start: fmt(start), end: end && !allDay ? fmt(end) : null, all_day: allDay });
+      else await cal('move', { source: e.source, record_id: e.record_id, prop_id: e.prop_id, start: fmt(start), end: e.isPage && end && +end !== +start ? fmt(end) : null, all_day: allDay });
       if (remember) { S.undo.push({ e: Object.assign({}, e, { s: start, e: end }), start: e.s, end: e.e }); toast('Moved · Ctrl+Z to undo'); }
       await load();
     } catch (x) { toast(x.message); load(); }

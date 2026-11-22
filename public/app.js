@@ -31,6 +31,7 @@
     bot: 'M12 8V4M8 4h8M5 8h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2zM9 14h.01M15 14h.01', book: 'M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5zM4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5',
     page: 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M8 13h8M8 17h6', wallet: 'M3 7a2 2 0 0 1 2-2h14v4M3 7v10a2 2 0 0 0 2 2h16V9H5a2 2 0 0 1-2-2zM16 14h.01',
     cal: 'M4 5h16v16H4zM16 3v4M8 3v4M4 10h16', gear: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z',
+    check: 'M20 6 9 17l-5-5',
     insta: 'M7 2h10a5 5 0 0 1 5 5v10a5 5 0 0 1-5 5H7a5 5 0 0 1-5-5V7a5 5 0 0 1 5-5zM12 16a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM17.5 6.5h.01', pin: 'M12 2a7 7 0 0 0-7 7c0 5 7 13 7 13s7-8 7-13a7 7 0 0 0-7-7zM12 11.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z',
     fb: 'M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z', upload: 'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12', out: 'M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9',
   };
@@ -38,13 +39,13 @@
     s.setAttribute('stroke-width', '1.8'); s.setAttribute('stroke-linecap', 'round'); s.setAttribute('stroke-linejoin', 'round'); const p = document.createElementNS('http://www.w3.org/2000/svg', 'path'); p.setAttribute('d', P[n] || ''); s.append(p); return s; };
 
   // ── what is in the sidebar ──
-  const LIVE = { home: 1, pages: 1, finance: 1, calendar: 1, settings: 1, ask: 1, moodboard: 1, boards: 1 };
+  const LIVE = { home: 1, tracker: 1, pages: 1, finance: 1, calendar: 1, settings: 1, ask: 1, moodboard: 1, boards: 1 };
   const NAV = [
     [null, [['home', 'Home', 'home'], ['explore', 'Explore', 'explore']]],
     ['Library', [['moodboard', 'Moodboard', 'grid'], ['boards', 'My Boards', 'bookmark'], ['bookmarks', 'Bookmarks', 'globe'], ['insights', 'Insights', 'chart'], ['rediscover', 'Rediscover', 'spark']]],
     ['Media', [['creators', 'Creators', 'users'], ['youtube', 'YouTube', 'play'], ['songs', 'Songs', 'music']]],
     ['AI', [['ask', 'Ask AI · ChatGPT', 'bot'], ['notebooks', 'Notebooks', 'book']]],
-    ['Workspace', [['pages', 'Pages', 'page'], ['finance', 'Finance', 'wallet'], ['calendar', 'Calendar', 'cal']]],
+    ['Workspace', [['tracker', 'Tracker', 'check'], ['pages', 'Pages', 'page'], ['finance', 'Finance', 'wallet'], ['calendar', 'Calendar', 'cal']]],
     ['Platforms', [['instagram', 'Instagram', 'insta'], ['pinterest', 'Pinterest', 'pin'], ['ytsync', 'YouTube', 'play'], ['facebook', 'Facebook', 'fb']]],
   ];
   const TITLE = Object.fromEntries(NAV.flatMap(([, items]) => items.map(([k, t]) => [k, t]))); TITLE.settings = 'Settings';
@@ -84,6 +85,7 @@
     else if (k === 'moodboard') v = frame('moodboard', '/library/index.html?theme=' + theme() + '#moodboard');
     else if (k === 'boards') v = frame('boards', '/library/index.html?theme=' + theme() + '#boards');
     else if (k === 'calendar') v = frame('calendar', '/calendar/index.html?theme=' + theme());
+    else if (k === 'tracker') v = frame('tracker', '/tracker/index.html?theme=' + theme());
     else if (k === 'home') { v = view('home', () => {}); renderHome(v); }
     else if (k === 'settings') { v = view('settings', () => {}); renderSettings(v); }
     else if (k === 'ask') v = view('ask', (el) => renderAsk(el));

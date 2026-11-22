@@ -1,0 +1,312 @@
+/* Curio Tracker on the web — the same book as the desktop's Tracker: Home, Tasks, Check-ins, Habits, Sleep, NoFap, Nudges, Inspo,
+   and phone reminders. Everything is one call: POST /api/tracker {op, args}. */
+(function () {
+  'use strict';
+  const $ = (s, r = document) => r.querySelector(s);
+  const h = (tag, attrs = {}, ...kids) => {
+    const e = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs || {})) {
+      if (k === 'html') e.innerHTML = v; else if (k === 'style' && typeof v === 'object') { for (const [sk, sv] of Object.entries(v)) { if (sk.startsWith('--')) e.style.setProperty(sk, sv); else e.style[sk] = sv; } }
+      else if (k.startsWith('on')) e.addEventListener(k.slice(2), v); else if (v !== false && v != null) e.setAttribute(k, v === true ? '' : v);
+    }
+    for (const k of kids.flat()) if (k != null && k !== false) e.append(k.nodeType ? k : document.createTextNode(String(k)));
+    return e;
+  };
+  const toast = (m) => { const t = $('#toast'); t.textContent = m; t.classList.add('on'); clearTimeout(t._t); t._t = setTimeout(() => t.classList.remove('on'), 2400); };
+  async function post(url, body) {
+    const r = await fetch(url, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-Curio': '1' }, body: JSON.stringify(body) });
+    if (r.status === 401) { (window.top || window).location.href = '/api/auth/login?next=/%23/tracker'; throw new Error('Signing you in…'); }
+    const j = await r.json(); if (j.error) throw new Error(j.error); return j.data;
+  }
+  const api = (op, args = {}) => post('/api/tracker', { op, args });
+  const act = async (op, args, msg) => { try { await api(op, args); if (msg) toast(msg); draw(); } catch (e) { toast(e.message); } };
+  const pad = (n) => String(n).padStart(2, '0');
+  const iso = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const t12 = (hm) => { if (!hm) return ''; let [a, b] = hm.split(':').map(Number); const ap = a < 12 ? 'AM' : 'PM'; a = a % 12 || 12; return `${a}:${pad(b)} ${ap}`; };
+  const hm = (m) => `${Math.floor(m / 60)}h ${pad(m % 60)}m`;
+  const mins = (m) => m < 60 ? `${m} min` : `${Math.floor(m / 60)} h${m % 60 ? ' ' + pad(m % 60) + ' m' : ''}`;
+  const rel = (at) => { const d = Math.round((new Date(at) - new Date()) / 60000); if (d < 0) return null; if (d < 1) return 'now'; if (d < 60) return `in ${d} min`; return `in ${Math.floor(d / 60)} h ${pad(d % 60)} m`; };
+  const dayLab = (s) => { const d = new Date(s + 'T00:00'); const t = new Date(); t.setHours(0, 0, 0, 0); const k = Math.round((d - t) / 864e5);
+    return k === 0 ? 'Today' : k === 1 ? 'Tomorrow' : k === -1 ? 'Yesterday' : d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }); };
+  const chk = (on, c, fn) => h('button', { class: 'chk' + (on ? ' on' : ''), style: { '--c': c || 'var(--accent)' }, onclick: (e) => { e.stopPropagation(); fn(!on); }, 'aria-label': on ? 'Done' : 'Not done' });
+
+  // ── a bottom sheet for every form ──
+  function sheet(title, body, buttons) {
+    const s = $('#sheet'), sc = $('#scrim');
+    const close = () => { s.classList.remove('on'); sc.classList.remove('on'); };
+    s.replaceChildren(h('h2', {}, title), body, h('div', { class: 'acts' }, ...(buttons || []).map(([t, cls, fn]) => h('button', { class: 'btn ' + (cls || ''), onclick: async () => { if ((await fn()) !== false) close(); } }, t)),
+      h('button', { class: 'btn soft', onclick: close }, 'Close')));
+    sc.onclick = close; requestAnimationFrame(() => { s.classList.add('on'); sc.classList.add('on'); }); return close;
+  }
+  const field = (lab, el) => h('div', {}, h('label', { class: 'l' }, lab), el);
+  const inp = (v, ph, type = 'text') => h('input', { class: 'inp', type, value: v ?? '', placeholder: ph || '' });
+
+  // ── tabs ──
+  const TABS = [['home', 'Home'], ['tasks', 'Tasks'], ['checkins', 'Check-ins'], ['habits', 'Habits'], ['sleep', 'Sleep'], ['quit', 'NoFap'], ['nudges', 'Nudges'], ['inspo', 'Inspo'], ['phone', 'Setup']];
+  let cur = (location.hash.slice(1) || 'home');
+  function nav() { $('#nav').replaceChildren(...TABS.map(([k, t]) => h('button', { class: 'tab' + (k === cur ? ' on' : ''), onclick: () => { cur = k; location.hash = k; nav(); draw(); } }, t))); }
+  let tick = null;
+  async function draw() {
+    clearInterval(tick); const p = $('#page');
+    try { await (V[cur] || V.home)(p); } catch (e) { p.replaceChildren(h('div', { class: 'card' }, h('b', {}, 'Could not load: '), e.message)); }
+  }
+  const V = {};
+
+  // ── Home ──
+  V.home = async (p) => {
+    const d = await api('home'); const hr = new Date().getHours();
+    const greet = hr < 5 ? 'LATE NIGHT' : hr < 12 ? 'GOOD MORNING' : hr < 17 ? 'GOOD AFTERNOON' : hr < 21 ? 'GOOD EVENING' : 'GOOD NIGHT';
+    const left = d.total - d.done; const nxt = d.timeline.filter(x => x.state === 'upcoming' && x.time);
+    const pct = d.total ? Math.round(100 * d.done / d.total) : 0;
+    const ring = h('div', { class: 'ring', html: `<svg width="76" height="76" viewBox="0 0 76 76"><circle cx="38" cy="38" r="31" stroke="rgba(255,255,255,.25)" stroke-width="8" fill="none"/><circle cx="38" cy="38" r="31" stroke="#fff" stroke-width="8" fill="none" stroke-linecap="round" stroke-dasharray="${(2 * Math.PI * 31 * pct / 100).toFixed(1)} 999" transform="rotate(-90 38 38)"/><text x="38" y="43" text-anchor="middle" fill="#fff" font-size="16" font-weight="900">${pct}%</text></svg>` });
+    const els = [h('div', { class: 'card hero' }, h('div', { class: 'grow' }, h('div', { class: 'g' }, greet), h('div', { class: 't' }, !d.total ? 'Nothing planned yet' : !left ? 'Everything is done today' : `${left} thing${left > 1 ? 's' : ''} left today`),
+      nxt.length ? h('div', { class: 'n', html: `Next: <b>${nxt[0].title}</b> at ${t12(nxt[0].time)}` }) : null, d.top3.length ? h('div', { class: 'n', html: `Main thing: <b>${d.top3[0].title}</b>` }) : null), ring)];
+    const mini = h('div', { class: 'grid2' });
+    if (d.sleep) mini.append(h('div', { class: 'card', onclick: () => { cur = 'sleep'; location.hash = 'sleep'; nav(); draw(); } }, h('h3', {}, 'Sleep', h('span', { class: 'sp' }), h('span', { class: 'pill', style: { '--c': d.sleep.color } }, d.sleep.grade)),
+      h('div', { class: 'big', style: { color: d.sleep.color } }, hm(d.sleep.minutes)), h('div', { class: 'muted' }, `${t12(d.sleep.bed.slice(11, 16))} → ${t12(d.sleep.wake.slice(11, 16))}`)));
+    for (const q of d.quit) mini.append(h('div', { class: 'card' }, h('h3', {}, q.name), h('div', { class: 'row' }, h('div', { class: 'big' }, q.days), h('div', { class: 'muted' }, 'days clean', h('br'), `best ${q.best}`)),
+      h('div', { class: 'row', style: { marginTop: '8px' } }, h('button', { class: 'btn sm primary', onclick: () => struggle(q.id) }, 'I’m struggling'), h('button', { class: 'btn sm', onclick: () => slipped(q.id, q.name) }, 'I slipped'))));
+    els.push(mini, h('div', { style: { height: '12px' } }));
+    // the day in order
+    const box = h('div', { class: 'card dark' }, h('h3', {}, 'Today'));
+    const open = d.timeline.filter(x => x.state !== 'done' && x.state !== 'info' && x.kind !== 'focus'); const done = d.timeline.filter(x => x.state === 'done');
+    const secs = [['NEXT', open.filter(x => x.time && x.state === 'upcoming')], ['STILL OPEN', open.filter(x => x.time && (x.state === 'late' || x.state === 'missed'))], ['ANY TIME TODAY', open.filter(x => !x.time)]];
+    const rels = [];
+    for (const [title, rows] of secs) {
+      if (!rows.length) continue; box.append(h('div', { class: 'sec' }, title));
+      rows.forEach((x, i) => {
+        const r = h('span', {}); if (x.at && x.state === 'upcoming') rels.push([r, x.at]); else if (x.state === 'late') r.append(h('span', { class: 'late' }, 'late'));
+        box.append(h('div', { class: 'item' + (title === 'NEXT' && i === 0 ? ' hi' : '') }, h('div', { class: 'muted', style: { width: '62px', fontSize: '12.5px' } }, t12(x.time)),
+          h('div', { class: 't' }, h('b', {}, x.title), h('small', { style: { color: x.color } }, x.tag)), r,
+          (x.kind === 'task' || x.kind === 'habit') ? h('button', { class: 'btn sm', onclick: () => x.kind === 'task' ? act('task_done', { id: x.ref }, 'Done') : act('habit_log', { id: x.ref, state: 'done' }, 'Done') }, 'Done') : null));
+      });
+    }
+    if (done.length) box.append(h('div', { class: 'sec' }, `DONE ${done.length}`), ...done.slice(0, 30).map(x => h('div', { class: 'item done' }, h('div', { class: 'muted', style: { width: '62px', fontSize: '12.5px' } }, t12(x.time)), h('div', { class: 't' }, h('b', {}, x.title)))));
+    els.push(box);
+    const upd = () => rels.forEach(([e, at]) => { const t = rel(at); e.className = t ? 'rel' : 'late'; e.textContent = t || 'late'; }); upd(); tick = setInterval(upd, 30000);
+    // check-ins
+    const tiles = h('div', { class: 'tiles' });
+    for (const [name, items] of Object.entries(d.routines)) {
+      const c = d.colors[name] || 'var(--accent)', n = items.filter(x => x.done).length;
+      tiles.append(h('div', { class: 'tile', style: { '--c': c } }, h('h4', {}, name, h('span', {}, `${n}/${items.length}`)),
+        ...items.map(x => h('div', { class: 'item' + (x.done ? ' done' : '') }, chk(x.done, c, (on) => act('habit_log', { id: x.id, state: on ? 'done' : null })), h('div', { class: 't' }, h('b', {}, x.name)), h('span', { class: 'faint' }, t12(x.time))))));
+    }
+    els.push(tiles);
+    // this week
+    const wk = h('div', { class: 'week' }); const today = iso(new Date());
+    for (const [day, list] of Object.entries(d.week)) {
+      const dd = new Date(day + 'T00:00');
+      wk.append(h('div', { class: 'day' + (day === today ? ' today' : '') }, h('div', { class: 'd' }, dd.toLocaleDateString('en-GB', { weekday: 'short' }) + ' ' + dd.getDate()),
+        ...list.map(x => h('div', { class: 'chip' + (x.done ? ' x' : ''), style: { '--c': x.color || '#888' }, title: x.title }, x.title))));
+    }
+    els.push(h('div', { class: 'card' }, h('h3', {}, 'This week'), wk));
+    p.replaceChildren(...els);
+  };
+
+  // ── Tasks ──
+  let AREAS = [];
+  V.tasks = async (p) => {
+    const d = await api('tasks'); AREAS = d.areas;
+    const row = (x, showDay) => h('div', { class: 'item' + (x.done ? ' done' : ''), onclick: () => taskForm(x) }, chk(x.done, x.color, (on) => act('task_done', { id: x.id, on }, on ? 'Done' : 'Opened again')),
+      h('div', { class: 't' }, h('b', {}, x.title), h('small', {}, [x.area, showDay && x.day ? dayLab(x.day) : '', x.time ? t12(x.time) + ' – ' + t12(endOf(x)) : '', x.repeat ? '↻ ' + x.repeat : ''].filter(Boolean).join('  ·  '))));
+    const els = [h('div', { class: 'row', style: { marginBottom: '10px' } }, h('div', { class: 'grow' }), h('button', { class: 'btn primary', onclick: () => taskForm({ day: iso(new Date()) }) }, '+ Task'))];
+    for (const [k, t] of [['overdue', 'Overdue'], ['today', 'Today'], ['upcoming', 'Upcoming'], ['someday', 'No date']]) {
+      if (!d[k].length && k !== 'today') continue;
+      els.push(h('div', { class: 'card' }, h('h3', {}, t, h('span', { class: 'muted' }, d[k].length || '')), ...(d[k].length ? d[k].map(x => row(x, k !== 'today')) : [h('div', { class: 'empty' }, 'Nothing for today.')])));
+    }
+    if (d.repeating.length) els.push(h('div', { class: 'card' }, h('h3', {}, 'Repeating'), ...d.repeating.map(x => h('div', { class: 'item' }, h('div', { class: 't' }, h('b', {}, x.title), h('small', {}, `${x.rule} · done ${x.done}×` + (x.next ? ' · next ' + dayLab(x.next) : ''))),
+      h('span', { class: 'pill', style: { '--c': x.state === 'running' ? 'var(--good)' : x.state === 'ending' ? 'var(--poor)' : 'var(--bad)' } }, x.state)))));
+    if (d.done.length) els.push(h('div', { class: 'card' }, h('h3', {}, 'Done lately'), ...d.done.slice(0, 10).map(x => row(x, true))));
+    p.replaceChildren(...els);
+  };
+  const endOf = (x) => { if (!x.time) return ''; const [a, b] = x.time.split(':').map(Number); const e = a * 60 + b + (x.minutes || 30); return `${pad(Math.floor(e / 60) % 24)}:${pad(e % 60)}`; };
+  async function taskForm(x) {
+    if (!AREAS.length) AREAS = (await api('tasks')).areas;
+    const title = inp(x.title, 'What needs doing?'); let area = x.area_id || (AREAS[0] || {}).id;
+    const chips = h('div', { class: 'chips' }, AREAS.map(a => { const b = h('button', { class: a.id === area ? 'on' : '', style: { '--c': a.color }, onclick: () => { area = a.id; chips.querySelectorAll('button').forEach(z => z.classList.toggle('on', z === b)); } }, a.name); return b; }));
+    const day = inp(x.day || '', '', 'date'), st = inp(x.time || '', '', 'time'), en = inp(x.time ? endOf(x) : '', '', 'time');
+    const note = h('textarea', { class: 'inp', rows: 3, placeholder: 'Notes (optional)' }, x.note || '');
+    const body = h('div', {}, field('Task', title), field('Board', chips), h('div', { class: 'grid2' }, field('Day', day), h('div', {})),
+      h('div', { class: 'grid2' }, field('Starts', st), field('Ends', en)), h('div', { class: 'faint' }, 'Leave the times empty for an all-day task. The length is worked out from start → end.'), field('Notes', note));
+    const btns = [['Save', 'primary', async () => {
+      let m = x.minutes || 30;
+      if (st.value && en.value) { const [a, b] = st.value.split(':').map(Number), [c, e] = en.value.split(':').map(Number); m = (c * 60 + e) - (a * 60 + b); if (m <= 0) m += 1440; }
+      try { await api('task_save', { task: { id: x.id, title: title.value, area_id: area, day: day.value || null, time: day.value && st.value ? st.value : null, minutes: m, note: note.value, remind: st.value ? 10 : -1 } }); toast('Saved'); draw(); }
+      catch (e) { toast(e.message); return false; }
+    }]];
+    if (x.id) btns.unshift(['Delete', 'danger', async () => { if (!confirm('Delete this task?')) return false; await act('task_delete', { id: x.id }, 'Deleted'); }]);
+    sheet(x.id ? 'Edit task' : 'New task', body, btns); setTimeout(() => title.focus(), 250);
+  }
+
+  // ── Check-ins and Habits ──
+  async function habitsView(p, routine) {
+    const d = await api('checkins'); const els = [];
+    const groups = routine ? [...d.order.filter(k => d.groups[k]), ...Object.keys(d.groups).filter(k => k && !d.order.includes(k))] : [''];
+    for (const g of groups) {
+      const items = d.groups[g] || []; const c = d.colors[g] || 'var(--accent)'; if (!routine && !items.length) { els.push(h('div', { class: 'card empty' }, 'No habits yet.')); continue; }
+      els.push(h('div', { class: 'card' }, h('h3', { style: { color: c } }, g || 'Habits', h('span', { class: 'sp' }), h('span', { class: 'muted', style: { fontSize: '13px' } }, `${items.filter(x => x.state === 'done').length}/${items.filter(x => x.due).length} today`)),
+        ...items.map(x => h('div', { class: 'item' + (x.state === 'done' ? ' done' : '') }, chk(x.state === 'done', c, (on) => act('habit_log', { id: x.id, state: on ? 'done' : null })),
+          h('div', { class: 't' }, h('b', {}, x.name), h('small', {}, [t12(x.time), x.streak ? `${x.streak} day streak` : '', `${x.pct}% · 30 days`].filter(Boolean).join('  ·  '))),
+          h('div', { class: 'dots' }, x.week.map(([day, s]) => h('div', { class: 'dot ' + s, style: { '--c': c }, title: day })))))));
+    }
+    if (d.changes.length) els.push(h('div', { class: 'card' }, h('h3', {}, 'Changes'), ...d.changes.map(x => h('div', { class: 'item' }, h('span', { class: 'pill', style: { '--c': x.color } }, x.what),
+      h('div', { class: 't' }, h('b', {}, x.name), h('small', {}, `${dayLab(x.day)} · ${x.detail}`))))));
+    els.push(h('div', { class: 'faint' }, 'Add, change or stop items in the desktop app (Tracker › Check-ins / Habits) — they show here at once.'));
+    p.replaceChildren(...els);
+  }
+  V.checkins = (p) => habitsView(p, true);
+  V.habits = (p) => habitsView(p, false);
+
+  // ── Sleep ──
+  let SL = { mode: 'week', off: 0 };
+  V.sleep = async (p) => {
+    const d = await api('sleep', SL);
+    const seg = h('div', { class: 'seg' }, [['week', 'Week'], ['month', 'Month'], ['30', '30 days']].map(([k, t]) => h('button', { class: SL.mode === k ? 'on' : '', onclick: () => { SL = { mode: k, off: 0 }; draw(); } }, t)));
+    const grid = h('div', { class: 'nights' });
+    for (let dt = new Date(d.start + 'T00:00'); dt <= new Date(d.end + 'T00:00'); dt.setDate(dt.getDate() + 1)) {
+      const k = iso(dt), r = d.nights[k]; const lab = dt.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+      grid.append(h('div', { class: 'night' + (r ? ' has' : ''), style: r ? { '--c': r.color } : {}, onclick: () => sleepForm(k, r, d) }, h('div', { class: 'faint' }, lab),
+        r ? h('div', { class: 'h' }, hm(r.minutes)) : h('div', { class: 'faint' }, 'not logged'), r ? h('div', { class: 'faint' }, `${t12(r.bed.slice(11, 16))} → ${t12(r.wake.slice(11, 16))}`) : null));
+    }
+    p.replaceChildren(h('div', { class: 'card' }, h('h3', {}, `Every night ${t12(d.bed)} → ${t12(d.wake)}`), h('div', { class: 'muted' }, d.auto ? 'Each night fills in by itself on the desktop. If a night was different, tap it.' : 'Tap a night to log it.'),
+      h('div', { class: 'row', style: { marginTop: '10px' } }, h('button', { class: 'btn sm', onclick: () => usualForm(d) }, 'Change usual times'))),
+      h('div', { class: 'row', style: { margin: '6px 0 10px' } }, seg, h('div', { class: 'grow' }), h('button', { class: 'btn sm', onclick: () => { SL.off--; draw(); } }, '‹'), h('button', { class: 'btn sm', disabled: SL.off >= 0, onclick: () => { SL.off++; draw(); } }, '›')),
+      grid, h('div', { class: 'row faint', style: { marginTop: '10px' } }, h('span', { style: { color: 'var(--good)' } }, '● Good'), h('span', { style: { color: 'var(--poor)' } }, '● Poor'), h('span', { style: { color: 'var(--bad)' } }, '● Bad')));
+  };
+  function sleepForm(night, r, d) {
+    const b = inp(r ? r.bed.slice(11, 16) : d.bed, '', 'time'), w = inp(r ? r.wake.slice(11, 16) : d.wake, '', 'time');
+    const btns = [['Save', 'primary', () => act('sleep_save', { night, bed: b.value, wake: w.value, id: r && r.id }, 'Saved')]];
+    if (r) btns.unshift(['Delete', 'danger', () => confirm('Delete this night?') ? act('sleep_delete', { id: r.id }, 'Deleted') : false]);
+    sheet(`Night of ${dayLab(night)}`, h('div', { class: 'grid2' }, field('In bed', b), field('Woke up', w)), btns);
+  }
+  function usualForm(d) {
+    const b = inp(d.bed, '', 'time'), w = inp(d.wake, '', 'time'), g = inp(d.goal, '', 'number');
+    sheet('Usual sleep', h('div', {}, h('div', { class: 'grid2' }, field('In bed', b), field('Up', w)), field('A good night = minutes of sleep', g)),
+      [['Save', 'primary', () => act('sleep_usual', { bed: b.value, wake: w.value, goal: g.value }, 'Saved')]]);
+  }
+
+  // ── NoFap ──
+  V.quit = async (p) => {
+    const qs = await api('quit'); if (!qs.length) { p.replaceChildren(h('div', { class: 'card empty' }, 'Nothing to quit yet — add it in the desktop app.')); return; }
+    const els = [];
+    for (const q of qs) {
+      els.push(h('div', { class: 'card' }, h('h3', {}, q.name), h('div', { class: 'row' }, h('div', { class: 'big', style: { fontSize: '46px' } }, q.days), h('div', { class: 'muted' }, `days clean + ${q.hours} h`, h('br'), `best ${q.best} · ${q.beaten} urges beaten · ${q.relapses} slips`)),
+        h('div', { class: 'row', style: { marginTop: '10px', flexWrap: 'wrap' } }, h('button', { class: 'btn primary', style: { flex: 1 }, onclick: () => struggle(q.id, q) }, 'I’m struggling'),
+          h('button', { class: 'btn', onclick: () => urgeForm(q.id) }, 'Log urge'), h('button', { class: 'btn', onclick: () => slipped(q.id, q.name) }, 'I slipped'))));
+      if (q.why) els.push(h('div', { class: 'card' }, h('h3', {}, 'Why I’m doing this'), ...q.why.split('\n').filter(Boolean).map(l => h('div', {}, '•  ' + l))));
+      els.push(h('div', { class: 'card' }, h('h3', {}, 'Every streak'), ...q.streaks.map(s => h('div', { class: 'item' }, h('div', { class: 't' }, h('b', {}, `${s.days} days`), h('small', {}, `${s.start.slice(0, 10)} – ${s.current ? 'now' : s.end.slice(0, 10)}`)), s.current ? h('span', { class: 'pill', style: { '--c': 'var(--good)' } }, 'now') : null))));
+    }
+    p.replaceChildren(...els);
+  };
+  async function struggle(id, q) {
+    q = q || (await api('quit')).find(x => x.id === id) || {};
+    let left = 600; const clock = h('div', { class: 'timer' }, '10:00');
+    const tips = (q.plan && q.plan.length ? q.plan : ['Leave the room or change where you are', 'Put the phone away — in another room', 'Drink water and take a short walk', 'Do something that keeps your mind busy']);
+    const body = h('div', {}, h('p', { class: 'muted' }, 'An urge doesn’t mean you have to act on it — it peaks and passes.'), clock, h('div', { class: 'faint', style: { textAlign: 'center' } }, '10-minute urge timer'),
+      h('div', { class: 'sec' }, 'TRY ONE NOW'), ...tips.map(t => h('label', { class: 'item' }, h('input', { type: 'checkbox' }), h('span', {}, t))),
+      q.why ? h('div', {}, h('div', { class: 'sec' }, 'WHY I’M DOING THIS'), ...q.why.split('\n').filter(Boolean).slice(0, 4).map(l => h('div', {}, '•  ' + l))) : null);
+    const iv = setInterval(() => { left = Math.max(0, left - 1); clock.textContent = left ? `${Math.floor(left / 60)}:${pad(left % 60)}` : 'You made it.'; if (!left) clearInterval(iv); }, 1000);
+    const close = sheet('You can get through this.', body, [['I got through it', 'primary', async () => { clearInterval(iv); await act('quit_log', { id, kind: 'urge', helped: 'urge timer' }, 'Urge beaten — saved'); }]]);
+    $('#scrim').addEventListener('click', () => clearInterval(iv), { once: true }); return close;
+  }
+  function urgeForm(id) {
+    const trig = h('div', { class: 'chips' }, ['Bored', 'Alone', 'Late night', 'Phone in bed', 'Stressed', 'Tired', 'Social media'].map(t => h('button', { onclick: (e) => { trig.querySelectorAll('button').forEach(b => b.classList.remove('on')); e.target.classList.add('on'); } }, t)));
+    const help = inp('', 'What helped? (optional)');
+    sheet('Urge beaten', h('div', {}, field('What triggered it', trig), field('What helped', help)),
+      [['Save', 'primary', () => act('quit_log', { id, kind: 'urge', trigger: (trig.querySelector('.on') || {}).textContent || '', helped: help.value }, 'Saved')]]);
+  }
+  function slipped(id, name) {
+    const now = new Date(); const when = inp(`${iso(now)}T${pad(now.getHours())}:${pad(now.getMinutes())}`, '', 'datetime-local');
+    const trig = h('div', { class: 'chips' }, ['Boredom', 'Stress', 'Late night', 'Phone in bed', 'Social media', 'Alone', 'Tired', 'Other'].map(t => h('button', { onclick: (e) => { trig.querySelectorAll('button').forEach(b => b.classList.remove('on')); e.target.classList.add('on'); } }, t)));
+    const note = h('textarea', { class: 'inp', rows: 2, placeholder: 'Anything you want to note (optional)' });
+    sheet('It’s okay — let’s understand what happened', h('div', {}, h('p', { class: 'muted' }, `${name}: one setback doesn’t erase your progress. Your history is kept; a new streak starts from this time.`), field('When', when), field('What triggered it', trig), field('Note', note)),
+      [['Save', 'primary', async () => { await api('quit_log', { id, kind: 'relapse', when: when.value, trigger: (trig.querySelector('.on') || {}).textContent || '', note: note.value });
+        sheet('Your next chapter starts now.', h('p', { class: 'muted' }, 'Your previous journey is saved. Your new streak starts from the moment you chose.'), []); draw(); }]]);
+  }
+
+  // ── Nudges ──
+  V.nudges = async (p) => {
+    const ns = await api('nudges');
+    p.replaceChildren(h('div', { class: 'card' }, h('h3', {}, 'Nudges', h('span', { class: 'sp' }), h('button', { class: 'btn sm primary', onclick: () => nudgeForm({}) }, '+ Nudge')),
+      h('div', { class: 'faint' }, 'On the phone you get the ones set to “once a day” or not “only while at the PC”. The others come on the desktop.'),
+      ...ns.map(n => h('div', { class: 'item', onclick: () => nudgeForm(n) }, chk(!!n.enabled, 'var(--accent)', (on) => act('nudge_save', { nudge: Object.assign({}, n, { enabled: on ? 1 : 0, days: JSON.parse(n.days || '[]') }) })),
+        h('div', { class: 't' }, h('b', {}, n.text), h('small', {}, (n.kind === 'timer' ? `every ${n.every} min · ${t12(n.start)}–${t12(n.end)}` : n.kind === 'drift' ? `when a distraction is on screen ${n.every}+ min` : `once a day at ${t12(n.start)}`) + (n.brief ? ' · AI brief' : '')))))));
+  };
+  function nudgeForm(n) {
+    const text = inp(n.text, 'e.g. Sit up straight'); const brief = h('textarea', { class: 'inp', rows: 4, placeholder: 'Brief for the AI — what this is for and when / how to remind you' }, n.brief || '');
+    const kind = h('select', { class: 'inp' }, [['timer', 'Every few minutes'], ['at', 'Once a day at a time'], ['drift', 'When a distraction is on screen (desktop)']].map(([k, t]) => h('option', { value: k, selected: (n.kind || 'timer') === k }, t)));
+    const every = inp(n.every || 40, '', 'number'), st = inp(n.start || '10:00', '', 'time'), en = inp(n.end || '23:30', '', 'time');
+    const pc = h('input', { type: 'checkbox', checked: n.id ? !!n.active_only : false });
+    const btns = [['Save', 'primary', () => act('nudge_save', { nudge: { id: n.id, text: text.value, brief: brief.value, kind: kind.value, every: +every.value, start: st.value, end: en.value, active_only: pc.checked ? 1 : 0, enabled: n.id ? n.enabled : 1, days: n.days ? JSON.parse(n.days) : [0, 1, 2, 3, 4, 5, 6] } }, 'Saved')]];
+    if (n.id) btns.unshift(['Delete', 'danger', () => confirm('Delete this nudge?') ? act('nudge_delete', { id: n.id }, 'Deleted') : false]);
+    sheet(n.id ? 'Edit nudge' : 'New nudge', h('div', {}, field('Title', text), field('Brief for the AI', brief), field('When', kind), h('div', { class: 'grid2' }, field('Every (min)', every), h('div', {})),
+      h('div', { class: 'grid2' }, field('From', st), field('To', en)), h('label', { class: 'item' }, pc, h('span', {}, 'Only while I am at the PC (desktop only)'))), btns);
+  }
+
+  // ── Inspo (goals, dreams, notes) ──
+  const NOTE = ['#fff1b8', '#ffd8e4', '#d6ecff', '#d9f5e3', '#e9defc', '#ffe3cc'];
+  V.inspo = async (p) => {
+    const d = await api('inspo'); const yr = new Date().getFullYear();
+    p.replaceChildren(h('div', { class: 'card' }, h('h3', {}, 'Goals'), ...d.goals.map(g => h('div', { class: 'item' + (g.done_at ? ' done' : '') }, chk(!!g.done_at, 'var(--good)', (on) => act('goal_done', { id: g.id, on })),
+        h('div', { class: 't' }, h('b', {}, g.title), h('small', {}, [g.why, g.due ? 'by ' + g.due : ''].filter(Boolean).join(' · '))))),
+      h('button', { class: 'btn sm', style: { marginTop: '8px' }, onclick: () => { const t = inp('', 'Goal'); sheet('New goal', field('Goal', t), [['Save', 'primary', () => act('goal_save', { goal: { kind: 'goal', title: t.value, due: `${yr}-12-31` } }, 'Saved')]]); } }, '+ Goal')),
+      d.dreams.length ? h('div', { class: 'card' }, h('h3', {}, 'Raw dreams'), ...d.dreams.map((g, i) => h('div', { class: 'item' }, h('b', {}, `${i + 1}.`), h('div', { class: 't' }, g.title)))) : null,
+      h('div', { class: 'card' }, h('h3', {}, 'Notes', h('span', { class: 'sp' }), h('button', { class: 'btn sm', onclick: () => noteForm({}) }, '+ Note')),
+        h('div', { class: 'grid2' }, ...d.notes.map(n => h('div', { class: 'note', style: { background: n.color || NOTE[n.id % NOTE.length] }, onclick: () => noteForm(n) }, n.title ? h('b', {}, n.title) : null, h('i', {}, n.text))))));
+  };
+  function noteForm(n) {
+    const t = inp(n.title, 'Title'), x = h('textarea', { class: 'inp', rows: 4, placeholder: 'A line, a quote, a reminder' }, n.text || '');
+    sheet(n.id ? 'Edit note' : 'New note', h('div', {}, field('Title', t), field('Text', x)), [['Save', 'primary', () => act('note_save', { id: n.id, title: t.value, text: x.value, color: n.color || '' }, 'Saved')]]);
+  }
+
+  // ── Phone: reminders on this phone ──
+  V.phone = async (p) => {
+    const st = h('div', { class: 'muted' }, 'Checking…'); const supported = 'serviceWorker' in navigator && 'PushManager' in window;
+    const on = h('button', { class: 'btn primary', onclick: enable }, 'Turn on reminders on this phone');
+    const test = h('button', { class: 'btn', onclick: async () => { try { const r = await post('/api/tracker/push', { op: 'test' }); toast(r.sent ? 'Sent — it should pop up' : 'No phone is connected yet'); } catch (e) { toast(e.message); } } }, 'Send a test');
+    const url = h('code', { style: { display: 'block', wordBreak: 'break-all', padding: '10px', background: 'var(--card2)', borderRadius: '10px', userSelect: 'all' } }, '…');
+    post('/api/tracker/push', { op: 'tick_url' }).then(r => url.textContent = r.url).catch(e => url.textContent = e.message);
+    async function state() {
+      if (!supported) { st.textContent = 'This browser cannot get reminders. On iPhone: Share › Add to Home Screen, then open Curio from the home screen. On Android: use Chrome.'; return; }
+      const reg = await navigator.serviceWorker.getRegistration('/'); const sub = reg && await reg.pushManager.getSubscription();
+      st.textContent = sub ? 'Reminders are ON on this phone.' : (Notification.permission === 'denied' ? 'Notifications are blocked for Curio — allow them in the browser settings.' : 'Reminders are off on this phone.');
+    }
+    async function enable() {
+      try {
+        const perm = await Notification.requestPermission(); if (perm !== 'granted') { toast('Notifications were not allowed'); return; }
+        const reg = await navigator.serviceWorker.register('/sw.js', { scope: '/' }); await navigator.serviceWorker.ready;
+        const { key } = await post('/api/tracker/push', { op: 'key' });
+        const raw = Uint8Array.from(atob(key.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((key.length + 3) % 4)), c => c.charCodeAt(0));
+        const sub = (await reg.pushManager.getSubscription()) || await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: raw });
+        await post('/api/tracker/push', { op: 'subscribe', args: { sub: sub.toJSON(), name: navigator.userAgent.includes('Android') ? 'Android phone' : navigator.userAgent.includes('iPhone') ? 'iPhone' : 'Browser' } });
+        toast('Reminders are on'); state();
+      } catch (e) { toast(e.message); }
+    }
+    state();
+    const file = h('input', { type: 'file', accept: '.db', class: 'inp' }); const rep = h('input', { type: 'checkbox' }); const imp = h('div', { class: 'muted' });
+    const go = h('button', { class: 'btn', onclick: async () => {
+      const f = file.files[0]; if (!f) { toast('Pick myday.db first'); return; }
+      if (rep.checked && !confirm('Replace everything Tracker has on the web with the desktop copy?')) return;
+      go.disabled = true; imp.textContent = 'Copying…';
+      try {
+        const b64 = await new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(',')[1]); r.onerror = no; r.readAsDataURL(f); });
+        const n = await post('/api/tracker/import', { file: b64, replace: rep.checked });
+        imp.textContent = `Copied: ${n.tasks || 0} tasks, ${n.habits || 0} check-ins / habits, ${n.habit_log || 0} ticks, ${n.sleep || 0} nights, ${n.quit_events || 0} NoFap events.`; toast('Copied');
+      } catch (e) { imp.textContent = e.message; }
+      go.disabled = false;
+    } }, 'Copy it to the web');
+    p.replaceChildren(h('div', { class: 'card' }, h('h3', {}, 'Copy your desktop Tracker here (one time)'),
+        h('p', { class: 'muted' }, 'On the PC: Tracker › Plan › “Open the data folder” — the file is myday.db. Pick it here. (Your screen record stays on the PC.)'),
+        file, h('label', { class: 'item' }, rep, h('span', {}, 'Replace what is on the web')), h('div', { class: 'row' }, go), imp),
+      h('div', { class: 'card' }, h('h3', {}, 'Reminders on this phone'), st, h('div', { class: 'row', style: { marginTop: '10px', flexWrap: 'wrap' } }, on, test),
+      h('p', { class: 'faint' }, 'First add Curio to your home screen (browser menu › Add to Home screen) and open it from there.')),
+      h('div', { class: 'card' }, h('h3', {}, 'The every-minute check (one time setup)'),
+        h('p', { class: 'muted' }, 'Reminders go out when this address is opened. A free service opens it every minute for you:'), url,
+        h('ol', { class: 'muted' }, h('li', {}, 'Open cron-job.org → Sign up (free) → Create cronjob.'), h('li', {}, 'Title: Curio. URL: paste the address above.'), h('li', {}, 'Execution schedule: Every 1 minute → Create.')),
+        h('p', { class: 'faint' }, 'Keep this address private — it only lets someone trigger your reminders, nothing else.')));
+  };
+
+  addEventListener('hashchange', () => { const k = location.hash.slice(1); if (k && k !== cur && TABS.some(t => t[0] === k)) { cur = k; nav(); draw(); } });
+  nav(); draw();
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) draw(); });
+})();

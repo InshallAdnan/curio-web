@@ -1,6 +1,6 @@
 # Curio Web
 
-Curio on the web: **Pages** (the Notion-style workspace) and **Finance**, from any device. The other parts of Curio say
+Curio on the web: **Tracker** (tasks, check-ins, habits, sleep, NoFap, nudges, goals — with phone reminders), **Pages** (the Notion-style workspace) and **Finance**, from any device. The other parts of Curio say
 “Coming soon” here and keep working in the desktop app. The desktop app and the web are separate — the web has its own data.
 
 ## How it is built
@@ -8,6 +8,8 @@ Curio on the web: **Pages** (the Notion-style workspace) and **Finance**, from a
   `public/finance/` is Finance for the web, `public/app.js` the Curio sidebar, Home and Settings (with the one-time import).
 - `api/index.py` — every `/api/*` call (Python standard library only, no packages).
 - `server/finance/` — the desktop app's own money rules, unchanged. `server/pages.py` — the desktop's Pages logic.
+- `server/tracker.py` + `server/myday.py` — Tracker: the desktop's own `myday.py` (copied unchanged), its tables saved as `md_*`; `public/tracker/` is the phone-first page.
+- `server/push.py` + `public/sw.js` — phone reminders (Web Push, signed with this server's own key; a free cron service opens `/api/tracker/tick?key=…` every minute — the address is in Tracker › Setup).
 - `server/tdb.py` — the database: Turso (SQLite in the cloud). Finance and Pages are kept in memory on the server and every
   change is written to Turso in one transaction, guarded so two tabs never overwrite each other.
 - Sign-in: Google, only the address in `ALLOWED_EMAIL`. No passwords are stored anywhere.

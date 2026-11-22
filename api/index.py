@@ -87,6 +87,12 @@ def app(env, start):
             start('200 OK', headers + [('Content-Type', 'application/json; charset=utf-8'), ('Content-Encoding', 'gzip'), ('Content-Length', str(len(data)))])
             return [data]
 
+        if path == '/tracker/tick':
+            # the free cron service (cron-job.org) calls this every minute: due Tracker reminders → your phone
+            import push, tracker
+            if not r.q.get('key') or r.q.get('key') != push.tick_key(): return send('403 Forbidden', {'error': 'wrong key'})
+            return send('200 OK', tracker.tick())
+
         # ── signed in only ──
         u = auth.user(r.cookies)
         if path == '/me':
@@ -113,6 +119,32 @@ def app(env, start):
             b = r.json()
             try: return send('200 OK', {'ok': True, 'data': cal.call(b.get('op'), b.get('args') or {})})
             except (ValueError, KeyError, tdb.Conflict) as e: return send('200 OK', {'error': str(e) if not isinstance(e, KeyError) else f'Missing: {e}'})
+        if path == '/tracker':
+            import tracker
+            b = r.json()
+            try: return send('200 OK', {'ok': True, 'data': tracker.call(b.get('op'), b.get('args') or {})})
+            except (ValueError, KeyError, tdb.Conflict) as e: return send('200 OK', {'error': str(e) if not isinstance(e, KeyError) else f'Missing: {e}'})
+        if path == '/tracker/import':
+            import tracker
+            b = r.json()
+            try: return send('200 OK', {'ok': True, 'data': tracker.import_db(b.get('file') or '', bool(b.get('replace')))})
+            except (ValueError, tdb.Conflict) as e: return send('200 OK', {'error': str(e)})
+        if path == '/tracker/push':
+            import push
+            b = r.json(); op = b.get('op'); a = b.get('args') or {}
+            try:
+                if op == 'key': data = {'key': push.public_key()}
+                elif op == 'subscribe': data = push.subscribe(a.get('sub') or {}, a.get('name') or '')
+                elif op == 'unsubscribe': data = push.unsubscribe(a.get('endpoint') or '')
+                elif op == 'subs': data = push.subs()
+                elif op == 'test': data = {'sent': push.notify([('Curio test', 'Phone reminders work.', 'test', '/#/tracker')])}
+                elif op == 'tick_url': data = {'url': f"{r.origin}/api/tracker/tick?key={push.tick_key()}"}
+                else: raise ValueError(f'Unknown: {op}')
+                return send('200 OK', {'ok': True, 'data': data})
+            except ValueError as e: return send('200 OK', {'error': str(e)})
+        if path == '/tracker/inbox':
+            import push
+            return send('200 OK', {'ok': True, 'data': push.inbox()})
         if path == '/lib':
             import library
             b = r.json()

@@ -74,7 +74,11 @@ def view(a):
     cals, items, pev = pages.run(pages_part)
     if cfg.get('pages') is None and items:                         # first visit: remember the starting set
         cfg['pages'] = items; fin.run(lambda con: _save_cfg(con, cfg))
-    return dict(events=fev + pev, calendars=cals, sources=cfg['sources'], labels=SOURCE_LABELS, base=base, inks=cs.PAGE_INKS, colors=cs.PAGE_COLORS)
+    try:
+        import tracker
+        tev = tracker.call('calendar', {'start': start.isoformat(), 'end': end.isoformat()})
+    except Exception: tev = []
+    return dict(events=fev + pev + tev, calendars=cals, sources=cfg['sources'], labels=SOURCE_LABELS, base=base, inks=cs.PAGE_INKS, colors=cs.PAGE_COLORS)
 
 
 SOURCE_LABELS = {'income': 'Income', 'expense': 'Expenses', 'daily_total': 'Daily total', 'transfer': 'Transfers', 'subscription': 'Upcoming subscriptions'}
@@ -144,6 +148,9 @@ def add_db(a):
 def move(a):
     """an event dragged to another day / time (or resized). Finance: only its date changes."""
     src = a['source']
+    if src == 'myday':                                                # Tracker: a task, a night of sleep or a focus session
+        import tracker
+        return tracker.call('calendar_move', {'kind': a['kind'], 'id': a['id'], 'start': a['start'], 'end': a.get('end'), 'all_day': a.get('all_day')})
     if src.startswith('page:'):
         s = _dt(a['start']); e = _dt(a['end']) if a.get('end') else None
         return pages.run(lambda: cs.set_page_when(a['record_id'], a['prop_id'], s, e, bool(a.get('all_day'))) or True)
