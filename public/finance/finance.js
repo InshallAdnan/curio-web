@@ -348,16 +348,17 @@
     if (!hidden.has('depr')) {
       const mo = d.depr_month.reduce((a, r) => a + r[1], 0), yr = d.depr_year.reduce((a, r) => a + r[1], 0);
       cards.push(card('Depreciation', null, mo || yr ? [h('div', { class: 'row', style: { gap: '30px' } }, h('div', {}, h('div', { class: 'muted' }, 'This month'), h('div', { class: 'big expense' }, W(mo))), h('div', {}, h('div', { class: 'muted' }, 'This year'), h('div', { class: 'big expense' }, W(yr)))),
-        d.depr_year.slice(0, 4).map(([n, v]) => h('div', { class: 'li' }, h('div', { class: 'm' }, n), h('span', { class: 'muted' }, W(v) + ' this year'))), h('div', { class: 'faint' }, 'Value your things lose — set this aside to replace them. It is not taken from any account.')]
+        d.depr_year.slice(0, 4).map(([n, v]) => h('div', { class: 'li' }, h('div', { class: 'm' }, n), h('span', { class: 'muted' }, W(v) + ' this year'))), h('div', { class: 'faint' }, 'Value your things lose. Put it aside with the Replacement fund — depreciation itself never touches an account.')]
         : [h('p', { class: 'muted' }, 'Add the things you own in Assets (PC, camera, phone…) to see how much value they lose each month and year.'), btn('Add an asset', 'soft sm', () => location.hash = '#assets', 'plus')]));
     }
+    if (!hidden.has('fund') && (d.assets.count || (d.fund && d.fund.on))) cards.push(fundCard(d.fund, false));
     if (!hidden.has('assets')) cards.push(card('Things you own', btn('All', 'ghost sm', () => location.hash = '#assets'), d.assets.count ? h('div', { class: 'row', style: { gap: '30px', flexWrap: 'wrap' } },
       [['Worth today', W(d.assets.worth)], ['Loses each month', W(d.assets.monthly)], ['Items', d.assets.count]].map(([c, v]) => h('div', {}, h('div', { class: 'muted' }, c), h('div', { class: 'big' }, v)))) : h('p', { class: 'muted' }, 'Add your PC, phone or equipment to see their value and monthly depreciation.')));
     el.append(h('div', { class: 'g gauto rise' }, cards));
     return el;
   }
   function customize(at, hidden) {
-    const CARDS = [['flow', 'Cash flow, health and emergency fund'], ['where', 'Where the money went'], ['recent', 'Recent activity'], ['depr', 'Depreciation'], ['subs', 'Subscriptions'], ['goals', 'Goals'], ['assets', 'Things you own']];
+    const CARDS = [['flow', 'Cash flow, health and emergency fund'], ['where', 'Where the money went'], ['recent', 'Recent activity'], ['depr', 'Depreciation'], ['fund', 'Replacement fund'], ['subs', 'Subscriptions'], ['goals', 'Goals'], ['assets', 'Things you own']];
     menu(at, CARDS.map(([k, t]) => ({ t: (hidden.has(k) ? '☐  ' : '☑  ') + t, fn: () => { hidden.has(k) ? hidden.delete(k) : hidden.add(k); act('settings_set', { overview_hidden: [...hidden].join(',') }); } })));
   }
   function setLimit() {
@@ -543,10 +544,64 @@
       { name: a.name, kind: a.kind, price: a.id ? plain(a.price) : '', date: a.purchase_date, life: a.life_months, salvage: a.salvage ? plain(a.salvage) : '', note: a.note },
       async (v) => { const id = await api('asset_save', { ...v, id: a.id }); ST.assetSel = a.id || id; toast('Saved'); await reload(); });
   }
+  // ── replacement fund: put aside what your things lose, so the money is there to replace them ──
+  function fundSetup(f) {
+    const st = (f && f.settings) || {};
+    form('Replacement fund', [
+      { html: h('p', { class: 'muted', style: { margin: 0 } }, 'Each month your things lose some value (depreciation). Put that much aside in one account, so when the laptop or camera needs replacing the money is already there.') },
+      { k: 'account', label: 'Fund account (where the money is kept)', type: 'select', options: accOpts(), blank: '— pick an account —', hint: 'Best: a separate account or jar just for this. Add one in Accounts first if you need to.' },
+      { k: 'source', label: 'Money usually comes from', type: 'select', options: accOpts(), blank: '— ask each time —', half: true },
+      { k: 'since', label: 'Start counting from (month)', type: 'month', half: true, hint: 'Months before this are not counted.' }],
+      { account: st.account || '', source: st.source || '', since: (f && f.since) || thisMonth() },
+      async (v) => { if (!v.account) throw new Error('Pick the fund account'); await api('fund_setup', v); toast('Fund is on'); await reload(); });
+  }
+  function fundPut(f, amount) {
+    form('Put aside', [
+      { k: 'amount', label: 'Amount', type: 'amount', half: true }, { k: 'date', label: 'Date', type: 'date', half: true },
+      { k: 'source', label: 'From', type: 'select', options: accOpts().filter(([id]) => id !== f.settings.account), blank: '— pick —' },
+      { k: 'note', label: 'Note (optional)' },
+      { html: h('div', { class: 'faint' }, `Goes into ${f.account.name}. It is a normal transfer, so you will see it in Transfers too.`) }],
+      { amount: amount ? plain(amount) : '', date: today(), source: f.settings.source || '' },
+      async (v) => { if (!v.source) throw new Error('Pick the account the money comes from'); await api('fund_set_aside', v); toast('Put aside'); await reload(); });
+  }
+  function fundMenu(at, f) {
+    menu(at, [{ t: 'Fund settings', fn: () => fundSetup(f) },
+      f.settings.paused ? { t: 'Resume (show what is due again)', fn: () => act('fund_option', { paused: false }, 'Resumed') } : { t: 'Pause for now', fn: () => act('fund_option', { paused: true }, 'Paused — what is due keeps adding up') },
+      { t: f.settings.spread ? `Missed months: spread over ${f.settings.spread} months` : 'Missed months: pay all at once', fn: () => form('Missed months', [
+        { k: 'spread', label: 'How to catch up', type: 'select', options: [[0, 'All at once'], [3, 'Spread over 3 months'], [6, 'Spread over 6 months'], [12, 'Spread over 12 months']] }],
+        { spread: f.settings.spread || 0 }, async (v) => { await api('fund_option', { spread: +v.spread }); await reload(); }) },
+      '-', { t: 'Turn the fund off', danger: true, fn: async () => { if (await ask('Turn the replacement fund off? The money you moved stays in your accounts.', 'Turn off')) act('fund_off', {}, 'Off'); } }]);
+  }
+  function fundCard(f, full) {
+    if (!f || !f.on) return card('Replacement fund', null, h('p', { class: 'muted' }, 'Put aside what your things lose each month, so you can replace them without a shock. Missed months are remembered.'),
+      btn('Turn it on', 'soft sm', () => fundSetup(f), 'plus'));
+    const metric = (c, v, cls) => h('div', {}, h('div', { class: 'muted' }, c), h('div', { class: 'big ' + (cls || ''), style: { fontSize: '20px' } }, v));
+    const top = h('div', { class: 'row', style: { gap: '26px', flexWrap: 'wrap', marginBottom: '10px' } }, metric('Should be saved', W(f.due)), metric('Saved', W(f.saved), 'income'), metric('Pending', W(f.pending), f.pending ? 'expense' : ''));
+    const parts = [`${W(f.month_due)} for this month`]; if (f.catchup) parts.push(`${W(f.catchup)} from missed months` + (f.settings.spread ? ` (spread over ${f.settings.spread} months)` : ''));
+    const msg = f.settings.paused ? h('div', { class: 'faint' }, `Paused. ${W(f.pending)} is pending and keeps adding up until you resume.`)
+      : f.pending <= 0 ? h('div', { class: 'faint' }, 'All caught up.')
+      : f.suggest <= 0 ? h('div', { class: 'faint' }, `This month is done. ${W(f.pending)} from missed months comes in the next months.`)
+      : h('div', {}, h('div', {}, h('b', {}, `This month put aside ${W(f.suggest)}`)),
+          h('div', { class: 'faint' }, parts.join(' + ') + (f.month_saved ? ` · already put aside ${W(f.month_saved)} this month` : '')));
+    const acts = h('div', { class: 'row', style: { gap: '8px', marginTop: '10px', flexWrap: 'wrap' } },
+      f.settings.paused ? btn('Resume', 'soft sm', () => act('fund_option', { paused: false }, 'Resumed')) : btn(f.suggest ? `Put aside ${W(f.suggest)}` : 'Put aside', 'primary sm', () => fundPut(f, f.suggest)),
+      f.pending > f.suggest && !f.settings.paused ? btn(`Catch up all ${W(f.pending)}`, 'soft sm', () => fundPut(f, f.pending)) : null);
+    const kids = [top, h('div', { style: { marginBottom: '8px' } }, bar(f.due ? f.saved / f.due : 1, 'var(--income)')), msg, acts,
+      h('div', { class: 'faint', style: { marginTop: '8px' } }, `Fund: ${f.account.name} · balance ${fmt(f.balance, f.account.currency, { whole: true })} · counting since ${monthLabel(f.since)}`)];
+    if (full) {
+      if (f.per_asset.length) kids.push(h('h3', { style: { fontSize: '14px', margin: '14px 0 6px' } }, 'Each thing'),
+        ...f.per_asset.map(x => h('div', { class: 'li', style: { padding: '5px 0' } }, h('div', { class: 'm' }, x.name), h('span', { class: 'muted' }, `saved ${W(x.saved)} of ${W(x.due)}`), h('b', { class: x.pending ? 'expense' : '', style: { minWidth: '150px', textAlign: 'right', whiteSpace: 'nowrap' } }, x.pending ? W(x.pending) + ' pending' : 'done'))));
+      kids.push(h('h3', { style: { fontSize: '14px', margin: '14px 0 6px' } }, 'Put aside so far'),
+        f.moves.length ? f.moves.map(m => h('div', { class: 'li' }, h('div', { class: 'm' }, h('div', { class: 't' }, nice(m.date)), m.note ? h('div', { class: 'faint' }, m.note) : null), h('b', { class: 'income' }, W(m.amount)),
+          btn('', 'ghost sm icon', async () => { if (await ask('Remove this set-aside? Its transfer is removed too.', 'Remove')) act('fund_move_delete', { id: m.id }, 'Removed'); }, 'trash'))) : h('p', { class: 'muted' }, 'Nothing yet.'));
+    }
+    return card('Replacement fund', btn('', 'ghost sm icon', (e) => fundMenu(e.currentTarget, f), 'more'), ...kids);
+  }
   async function vAssets() {
     const d = await api('assets'); META = d.meta;
     const el = h('div', {}, head('Assets', `Things you own · they lose ${W(d.monthly)} of value a month`, btn('New asset', 'primary', () => assetDialog(), 'plus')));
     if (!d.rows.length) { el.append(card(null, null, h('div', { class: 'empty' }, h('h2', {}, 'Nothing yet'), h('p', {}, 'Add your PC, camera, phone or equipment to see their value today and the depreciation each month.')))); return el; }
+    el.append(h('div', { style: { marginBottom: '16px' } }, fundCard(d.fund, true)));
     const a = d.rows.find(x => x.id === ST.assetSel) || d.rows[0]; ST.assetSel = a.id; const st = a.status_info;
     const list = card(null, null, d.rows.map(x => h('div', { class: 'li', style: { cursor: 'pointer', padding: '8px', borderRadius: '10px', background: x.id === a.id ? 'var(--soft)' : '' }, onclick: () => { ST.assetSel = x.id; reload(); } },
       h('div', { class: 'm' }, h('div', { class: 't' }, x.name), h('div', { class: 'faint' }, (x.kind ? x.kind + ' · ' : '') + (x.status === 'sold' ? 'sold' : 'worth ' + fmt(x.status_info.book, x.currency, { whole: true })))))));

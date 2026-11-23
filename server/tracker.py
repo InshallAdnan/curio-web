@@ -122,6 +122,11 @@ def task_save(c, a):
 
 def calendar_events(c, a):
     s, e = _d(a['start']), _d(a['end']); out = M.task_events(c, s, e)
+    try: M.ensure_recent_nights(c)                                  # last night from your every-night times, even if Tracker was not opened
+    except Exception: pass
+    for night, b, w in M.planned_nights(c, s, e):
+        out.append(dict(id=f"myday:plan:{M.iso(night)}", source='myday', date=b.date(), start=b, end=w, all_day=False, mkind='sleepplan', mid=M.iso(night),
+                        title=f"Sleep · plan {M.hm(int((w - b).total_seconds() // 60))}", color='#6d5bd01a', ink='#6d5bd0', calendar='Tracker · Sleep', planned=True))
     for r in M.sleeps(c, 400):
         b, w = datetime.fromisoformat(r['bed']), datetime.fromisoformat(r['wake'])
         if s <= b.date() <= e or s <= w.date() <= e:
@@ -136,8 +141,11 @@ def calendar_events(c, a):
 
 def calendar_move(c, a):
     """a Tracker block dragged / stretched in the calendar"""
-    k, rid = a['kind'], int(a['id']); st = datetime.fromisoformat(a['start'][:16]); en = datetime.fromisoformat(a['end'][:16]) if a.get('end') else None
+    k = a['kind']; st = datetime.fromisoformat(a['start'][:16]); en = datetime.fromisoformat(a['end'][:16]) if a.get('end') else None
     allday = bool(a.get('all_day'))
+    if k == 'sleepplan':                                            # a planned night moved → it becomes a real night
+        M.write_planned_night(c, str(a['id']), st, en or st + timedelta(hours=8)); return True
+    rid = int(a['id'])
     if k == 'task':
         t = M.task(c, rid); mins = int((en - st).total_seconds() // 60) if (en and not allday) else int(t['minutes'] or 30)
         c.execute('UPDATE tasks SET day=?, time=?, minutes=?, updated=? WHERE id=?', (M.iso(st.date()), None if allday else st.strftime('%H:%M'), max(5, mins), M.stamp(), rid))
@@ -158,7 +166,8 @@ def checkins(c, a):
     out = {}
     for h in allh:
         st = M.stats(c, h, 30)
-        out.setdefault(h['routine'] or '', []).append(dict(id=h['id'], name=h['name'], time=h['time'], due=M.due_on(h, t), state=logs.get(h['id']),
+        out.setdefault(h['routine'] or '', []).append(dict(id=h['id'], name=h['name'], time=h['time'], etime=h.get('etime'), due=M.due_on(h, t), state=logs.get(h['id']),
+                                                          history=M.period_lines(h) if len(h['periods']) > 1 else [],
                                                           week=[[M.iso(d), x] for d, x in by[h['id']]['cells']], streak=st['streak'], pct=st['pct'],
                                                           routine=h['routine'], area_id=h['area_id'], days=h['days'], remind=h['remind']))
     return dict(groups=out, order=M.ROUTINES, colors=M.ROUTINE_COLORS, changes=M.habit_changes(c)[:12],
@@ -277,10 +286,12 @@ def tick():
     at = M.now(); items = []
 
     def go(c):
+        try: M.ensure_recent_nights(c, at)                          # every night is written from your usual times, the morning after
+        except Exception: pass
         for key, title, body, kind, ref in M.due_reminders(c, at, 15):
             M.mark_sent(c, key); items.append((title, body, kind, '/#/tracker'))
         for n in M.due_nudges(c, at, active=False):
-            if n['kind'] == 'at' or not n['active_only']:
+            if n['kind'] != 'drift' and not n['active_only']:       # the phone gets only "phone too" nudges; screen ones stay on the PC
                 M.nudge_fired(c, n['id'], at); items.append((n['text'], '', 'nudge', '/#/tracker'))
         return len(items)
     run(go)

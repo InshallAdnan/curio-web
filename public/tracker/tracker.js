@@ -93,7 +93,7 @@
     for (const [name, items] of Object.entries(d.routines)) {
       const c = d.colors[name] || 'var(--accent)', n = items.filter(x => x.done).length;
       tiles.append(h('div', { class: 'tile', style: { '--c': c } }, h('h4', {}, name, h('span', {}, `${n}/${items.length}`)),
-        ...items.map(x => h('div', { class: 'item' + (x.done ? ' done' : '') }, chk(x.done, c, (on) => act('habit_log', { id: x.id, state: on ? 'done' : null })), h('div', { class: 't' }, h('b', {}, x.name)), h('span', { class: 'faint' }, t12(x.time))))));
+        ...items.map(x => h('div', { class: 'item' + (x.done ? ' done' : '') }, chk(x.done, c, (on) => act('habit_log', { id: x.id, state: on ? 'done' : null })), h('div', { class: 't' }, h('b', {}, x.name)), h('span', { class: 'faint' }, rng(x))))));
     }
     els.push(tiles);
     // this week
@@ -126,6 +126,7 @@
     if (d.done.length) els.push(h('div', { class: 'card' }, h('h3', {}, 'Done lately'), ...d.done.slice(0, 10).map(x => row(x, true))));
     p.replaceChildren(...els);
   };
+  const rng = (x) => x.time ? t12(x.time) + (x.etime ? ' – ' + t12(x.etime) : '') : '';
   const endOf = (x) => { if (!x.time) return ''; const [a, b] = x.time.split(':').map(Number); const e = a * 60 + b + (x.minutes || 30); return `${pad(Math.floor(e / 60) % 24)}:${pad(e % 60)}`; };
   async function repForm() {
     if (!AREAS.length) AREAS = (await api('tasks')).areas;
@@ -171,7 +172,7 @@
       els.push(h('div', { class: 'card' }, h('h3', { style: { color: c } }, g || 'Habits', h('span', { class: 'sp' }), h('span', { class: 'muted', style: { fontSize: '13px' } }, `${items.filter(x => x.state === 'done').length}/${items.filter(x => x.due).length} today`),
           h('button', { class: 'btn sm', onclick: () => habitForm({ routine: g }, d) }, '+')),
         ...items.map(x => h('div', { class: 'item' + (x.state === 'done' ? ' done' : ''), onclick: () => habitForm(x, d) }, chk(x.state === 'done', c, (on) => act('habit_log', { id: x.id, state: on ? 'done' : null })),
-          h('div', { class: 't' }, h('b', {}, x.name), h('small', {}, [t12(x.time), x.streak ? `${x.streak} day streak` : '', `${x.pct}% · 30 days`].filter(Boolean).join('  ·  '))),
+          h('div', { class: 't' }, h('b', {}, x.name), h('small', {}, [rng(x), x.streak ? `${x.streak} day streak` : '', `${x.pct}% · 30 days`].filter(Boolean).join('  ·  '))),
           h('div', { class: 'dots' }, x.week.map(([day, s]) => h('div', { class: 'dot ' + s, style: { '--c': c }, title: day })))))));
     }
     if (d.changes.length) els.push(h('div', { class: 'card' }, h('h3', {}, 'Changes'), ...d.changes.map(x => h('div', { class: 'item' }, h('span', { class: 'pill', style: { '--c': x.color } }, x.what),
@@ -190,14 +191,15 @@
     const rt = h('select', { class: 'inp' }, [...new Set([...(d.order || []), ...(x.routine ? [x.routine] : [])])].map(r => h('option', { value: r, selected: r === x.routine }, r)));
     let days = (x.days && x.days.length ? x.days : [0, 1, 2, 3, 4, 5, 6]).slice();
     const dchips = h('div', { class: 'chips' }, DOW.map((t, i) => { const b = h('button', { class: days.includes(i) ? 'on' : '', onclick: () => { days = days.includes(i) ? days.filter(z => z !== i) : [...days, i]; b.classList.toggle('on'); } }, t); return b; }));
-    const tm = inp(x.time || '', '', 'time'); const rem = h('input', { type: 'checkbox', checked: x.id ? (x.remind ?? -1) >= 0 : true });
+    const tm = inp(x.time || '', '', 'time'), tme = inp(x.etime || '', '', 'time'); const rem = h('input', { type: 'checkbox', checked: x.id ? (x.remind ?? -1) >= 0 : true });
     let area = x.area_id || (AREAS[0] || {}).id;
     const chips = h('div', { class: 'chips' }, AREAS.map(a => { const b = h('button', { class: a.id === area ? 'on' : '', style: { '--c': a.color }, onclick: () => { area = a.id; chips.querySelectorAll('button').forEach(z => z.classList.toggle('on', z === b)); } }, a.name); return b; }));
     const from = inp(iso(new Date()), '', 'date');
-    const body = h('div', {}, field('Name', name), isRt ? field('Check-in', rt) : null, field('Days', dchips), field('Time', tm), h('label', { class: 'item' }, rem, h('span', {}, 'Remind me at this time (phone and PC)')),
-      field('Board', chips), x.id ? field('Changes start on (earlier days keep the old plan)', from) : null);
+    const body = h('div', {}, field('Name', name), isRt ? field('Check-in', rt) : null, field('Days', dchips), h('div', { class: 'grid2' }, field('Starts', tm), field('Ends (optional)', tme)), h('label', { class: 'item' }, rem, h('span', {}, 'Remind me at the start time (phone and PC)')),
+      field('Board', chips), x.id ? field('Changes start on (earlier days keep the old plan and times)', from) : null,
+      x.history && x.history.length ? h('div', { class: 'faint', style: { marginTop: '8px' } }, h('b', {}, 'Plan history'), ...x.history.map(l => h('div', {}, l))) : null);
     const btns = [['Save', 'primary', async () => {
-      try { await api('habit_save', { habit: { id: x.id, name: name.value, routine: isRt ? rt.value : '', days: days.sort(), time: tm.value || null, remind: rem.checked && tm.value ? 0 : -1, area_id: area, kind: 'build' }, from_day: x.id ? from.value : null }); toast('Saved'); draw(); }
+      try { await api('habit_save', { habit: { id: x.id, name: name.value, routine: isRt ? rt.value : '', days: days.sort(), time: tm.value || null, etime: tm.value && tme.value ? tme.value : null, remind: rem.checked && tm.value ? 0 : -1, area_id: area, kind: 'build' }, from_day: x.id ? from.value : null }); toast('Saved'); draw(); }
       catch (e) { toast(e.message); return false; }
     }]];
     if (x.id) btns.unshift(['Stop it', 'danger', () => confirm(`Stop “${x.name}” from today? Its history stays.`) ? act('habit_end', { id: x.id }, 'Stopped') : false]);
@@ -282,20 +284,29 @@
   // ── Nudges ──
   V.nudges = async (p) => {
     const ns = await api('nudges');
-    p.replaceChildren(h('div', { class: 'card' }, h('h3', {}, 'Nudges', h('span', { class: 'sp' }), h('button', { class: 'btn sm primary', onclick: () => nudgeForm({}) }, '+ Nudge')),
-      h('div', { class: 'faint' }, 'On the phone you get the ones set to “once a day” or not “only while at the PC”. The others come on the desktop.'),
-      ...ns.map(n => h('div', { class: 'item', onclick: () => nudgeForm(n) }, chk(!!n.enabled, 'var(--accent)', (on) => act('nudge_save', { nudge: Object.assign({}, n, { enabled: on ? 1 : 0, days: JSON.parse(n.days || '[]') }) })),
-        h('div', { class: 't' }, h('b', {}, n.text), h('small', {}, (n.kind === 'timer' ? `every ${n.every} min · ${t12(n.start)}–${t12(n.end)}` : n.kind === 'drift' ? `when a distraction is on screen ${n.every}+ min` : `once a day at ${t12(n.start)}`) + (n.brief ? ' · AI brief' : '')))))));
+    const pcOnly = (n) => n.kind === 'drift' || !!n.active_only;
+    const row = (n) => h('div', { class: 'item', onclick: () => nudgeForm(n) }, chk(!!n.enabled, 'var(--accent)', (on) => act('nudge_save', { nudge: Object.assign({}, n, { enabled: on ? 1 : 0, days: JSON.parse(n.days || '[]') }) })),
+      h('div', { class: 't' }, h('b', {}, n.text), h('small', {}, (n.kind === 'timer' ? `every ${n.every} min · ${t12(n.start)}–${t12(n.end)}` : n.kind === 'drift' ? `by itself, when a distraction is on the PC screen ${n.every}+ min` : `once a day at ${t12(n.start)}`) + (n.brief ? ' · AI brief' : ''))));
+    const phone = ns.filter(n => !pcOnly(n)), pc = ns.filter(pcOnly);
+    p.replaceChildren(
+      h('div', { class: 'card' }, h('h3', {}, 'On your phone (and PC)', h('span', { class: 'sp' }), h('button', { class: 'btn sm primary', onclick: () => nudgeForm({ active_only: 0 }) }, '+ Nudge')),
+        h('div', { class: 'faint' }, 'These come as a notification on the phone at their time. Example: “Drink water” every 90 minutes, or “Pay rent” once a day at 10 AM.'),
+        ...(phone.length ? phone.map(row) : [h('div', { class: 'muted', style: { padding: '8px 0' } }, 'None yet — add one with + Nudge.')])),
+      h('div', { class: 'card' }, h('h3', {}, 'On the PC only', h('span', { class: 'sp' }), h('button', { class: 'btn sm', onclick: () => nudgeForm({ active_only: 1 }) }, '+ PC nudge')),
+        h('div', { class: 'faint' }, 'Screen things — look away, sit straight, and the one that comes by itself when a distraction is on screen. They pop up on the PC while you use it (Curio desktop open), never on the phone. You do not have to add these; they are already here.'),
+        ...pc.map(row)));
   };
   function nudgeForm(n) {
     const text = inp(n.text, 'e.g. Sit up straight'); const brief = h('textarea', { class: 'inp', rows: 4, placeholder: 'Brief for the AI — what this is for and when / how to remind you' }, n.brief || '');
-    const kind = h('select', { class: 'inp' }, [['timer', 'Every few minutes'], ['at', 'Once a day at a time'], ['drift', 'When a distraction is on screen (desktop)']].map(([k, t]) => h('option', { value: k, selected: (n.kind || 'timer') === k }, t)));
+    const kind = h('select', { class: 'inp' }, [['timer', 'Every few minutes'], ['at', 'Once a day at a time'], ['drift', 'By itself, when a distraction is on the PC screen']].map(([k, t]) => h('option', { value: k, selected: (n.kind || 'timer') === k }, t)));
     const every = inp(n.every || 40, '', 'number'), st = inp(n.start || '10:00', '', 'time'), en = inp(n.end || '23:30', '', 'time');
-    const pc = h('input', { type: 'checkbox', checked: n.id ? !!n.active_only : false });
-    const btns = [['Save', 'primary', () => act('nudge_save', { nudge: { id: n.id, text: text.value, brief: brief.value, kind: kind.value, every: +every.value, start: st.value, end: en.value, active_only: pc.checked ? 1 : 0, enabled: n.id ? n.enabled : 1, days: n.days ? JSON.parse(n.days) : [0, 1, 2, 3, 4, 5, 6] } }, 'Saved')]];
+    const where = h('select', { class: 'inp' }, [[0, 'On my phone too (and on the PC)'], [1, 'On the PC only — while I am using it']].map(([k, t]) => h('option', { value: k, selected: (n.active_only ? 1 : 0) === k }, t)));
+    const syncWhere = () => { if (kind.value === 'drift') where.value = '1'; where.disabled = kind.value === 'drift'; }; kind.addEventListener('change', syncWhere); syncWhere();
+    const btns = [['Save', 'primary', () => act('nudge_save', { nudge: { id: n.id, text: text.value, brief: brief.value, kind: kind.value, every: +every.value, start: st.value, end: en.value, active_only: +where.value, enabled: n.id ? n.enabled : 1, days: n.days ? JSON.parse(n.days) : [0, 1, 2, 3, 4, 5, 6] } }, 'Saved')]];
     if (n.id) btns.unshift(['Delete', 'danger', () => confirm('Delete this nudge?') ? act('nudge_delete', { id: n.id }, 'Deleted') : false]);
     sheet(n.id ? 'Edit nudge' : 'New nudge', h('div', {}, field('Title', text), field('Brief for the AI', brief), field('When', kind), h('div', { class: 'grid2' }, field('Every (min)', every), h('div', {})),
-      h('div', { class: 'grid2' }, field('From', st), field('To', en)), h('label', { class: 'item' }, pc, h('span', {}, 'Only while I am at the PC (desktop only)'))), btns);
+      h('div', { class: 'grid2' }, field('From', st), field('To', en)), field('Where', where),
+      h('div', { class: 'faint' }, 'For “once a day”, From is the time it comes. The brief tells the AI on the PC how to word it and when to be strict.')), btns);
   }
 
   // ── Inspo (goals, dreams, notes) ──

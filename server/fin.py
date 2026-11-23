@@ -7,12 +7,12 @@ import calendar, csv, io, json, os, sqlite3, tempfile
 from datetime import timedelta
 
 from tdb import Snapshot
-from finance import ledger, goals, subs, assets as A, reports, currency, db as fdb, backup
+from finance import ledger, goals, subs, assets as A, reports, currency, db as fdb, backup, fund
 from finance.money import parse_amount, to_minor, fmt
 from finance.util import this_month, month_label, short_month, add_months, ym, today, iso, month_bounds
 
 TABLES = ['settings', 'accounts', 'categories', 'transactions', 'transfers', 'goals', 'goal_contributions', 'subscriptions', 'sub_periods',
-          'sub_charges', 'assets', 'asset_events', 'rates', 'rate_history']
+          'sub_charges', 'assets', 'asset_events', 'rates', 'rate_history', 'fund_moves']
 BOOK = Snapshot('finance', TABLES)
 CAT_COLORS = ['#2F6FDE', '#D4533B', '#1F7A5C', '#8B5CF6', '#E0A100', '#0E8FA3', '#C2417A', '#6B7280', '#F2602D', '#3CC08C']
 
@@ -31,6 +31,7 @@ def _prepare(con):
     if 'time' not in tcols: con.execute("ALTER TABLE transfers ADD COLUMN time TEXT NOT NULL DEFAULT ''")
     if 'time' not in [r[1] for r in con.execute('PRAGMA table_info(transactions)')]:
         con.execute("ALTER TABLE transactions ADD COLUMN time TEXT NOT NULL DEFAULT ''")
+    fund.prepare(con)
     con.commit()
 
 
@@ -109,7 +110,7 @@ def overview(con, args):
         goals=[dict(D(g), progress=goals.progress(g)) for g in goals.list_goals(con)[:5]],
         subs_monthly=reports.subscriptions_monthly(con), subs_next=ups[:4],
         depr_month=reports.depreciation_between(con, iso(m0), iso(m1)), depr_year=reports.depreciation_between(con, f'{t.year}-01-01', f'{t.year}-12-31'),
-        assets=dict(count=len(al), worth=nw['assets'], monthly=reports.assets_monthly_depreciation(con)))
+        assets=dict(count=len(al), worth=nw['assets'], monthly=reports.assets_monthly_depreciation(con)), fund=fund.state(con))
 
 
 def transactions(con, args):
@@ -183,7 +184,7 @@ def assets_view(con, args):
     for a in A.list_assets(con):
         evs = A.events(con, a['id']); st = A.status(a, evs)
         out.append(dict(D(a), status_info=st, events=L(evs), years=reports.depreciation_by_year(con, a)))
-    return dict(rows=out, monthly=reports.assets_monthly_depreciation(con), meta=meta(con))
+    return dict(rows=out, monthly=reports.assets_monthly_depreciation(con), fund=fund.state(con), meta=meta(con))
 
 
 def reports_view(con, args):
@@ -337,6 +338,11 @@ OPS = {
     'asset_event_delete': lambda con, a: A.delete_event(con, I(a['id']), bool(a.get('delete_expense'))) or True,
     'asset_sell': lambda con, a: A.sell_asset(con, I(a['id']), a['date'], M(a.get('price')), I(a.get('deposit_to'))) or True,
     'asset_unsell': lambda con, a: A.unsell_asset(con, I(a['id'])) or True,
+    'fund_setup': lambda con, a: fund.setup(con, I(a['account']), I(a.get('source')), a.get('since') or None) or True,
+    'fund_set_aside': lambda con, a: fund.set_aside(con, M(a['amount']), a.get('date') or None, I(a.get('source')), a.get('note', '')),
+    'fund_move_delete': lambda con, a: fund.remove_move(con, I(a['id']), bool(a.get('keep_transfer'))) or True,
+    'fund_option': lambda con, a: fund.set_option(con, a.get('paused'), a.get('spread')) or True,
+    'fund_off': lambda con, a: fund.turn_off(con) or True,
     # money & settings
     'set_rate': lambda con, a: currency.set_rate(con, a['currency'].upper().strip(), float(a['rate'])) or True,
     'settings_set': set_settings, 'import_csv': import_csv, 'export_db': export_db, 'export_csv': export_csv,

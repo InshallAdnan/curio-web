@@ -177,14 +177,19 @@
     tg.append(h('div', { class: 'hours' }, [...Array(24)].map((_, i) => h('div', {}, i ? ampm(new Date(2000, 0, 1, i)) : ''))));
     days.forEach(d => {
       const col = h('div', { class: 'tcol' + (d.getDay() % 6 === 0 ? ' wkend' : ''), 'data-date': ymd(d) });
-      const timed = dayEvents(d).filter(e => !e.allDay);
+      const d0 = startOfDay(d), d1 = addDays(d0, 1);
+      const timed = [...dayEvents(d).filter(e => !e.allDay),                       // + the morning part of a night (or anything) that started yesterday
+        ...EV.filter(e => !e.allDay && e.s < d0 && e.e > d0).map(e => Object.assign(Object.create(Object.getPrototypeOf(e)), e, { cont: true }))];
       const lanes = [], ends = []; timed.forEach(e => { let l = ends.findIndex(t => t <= e.s); if (l < 0) { l = ends.length; ends.push(0); } ends[l] = e.e; lanes.push(l); });
       const n = Math.max(1, ends.length);
       timed.forEach((e, i) => {
-        const top = (e.s.getHours() * 60 + e.s.getMinutes()) / 60 * HOUR, mins = Math.max(20, (e.e - e.s) / 6e4);
-        const el = h('div', { class: 'ev' + (S.sel === e.id ? ' sel' : ''), 'data-id': e.id, style: { '--ink': e.ink, '--bgc': e.bg, top: top + 'px', height: Math.max(20, mins / 60 * HOUR - 2) + 'px', left: `calc(${lanes[i] / n * 100}% + 2px)`, width: `calc(${100 / n}% - 4px)` } },
+        const vs = e.cont ? d0 : e.s, ve = e.e > d1 ? d1 : e.e;                   // the part of it that falls on this day
+        const top = (vs.getHours() * 60 + vs.getMinutes()) / 60 * HOUR, mins = Math.max(20, (ve - vs) / 6e4);
+        const el = h('div', { class: 'ev' + (e.planned ? ' plan' : '') + (S.sel === e.id ? ' sel' : ''), 'data-id': e.id, style: { '--ink': e.ink, '--bgc': e.bg, top: top + 'px', height: Math.max(20, mins / 60 * HOUR - 2) + 'px', left: `calc(${lanes[i] / n * 100}% + 2px)`, width: `calc(${100 / n}% - 4px)` } },
           h('b', {}, (e.icon && e.icon.length <= 2 ? e.icon + ' ' : '') + e.title), h('small', {}, `${ampm(e.s)} – ${ampm(e.e)}`), e.isMd ? h('div', { class: 'rz rzt' }) : null, (e.isPage || e.isMd) ? h('div', { class: 'rz' }) : null);
-        attachDrag(el, e); col.append(el);
+        if (e.cont) { el.classList.add('cont'); el.querySelector('.rzt') && el.querySelector('.rzt').remove(); el.addEventListener('click', () => select(e.id)); contResize(el, e, d0); }
+        else attachDrag(el, e);
+        col.append(el);
       });
       if (sameDay(d, today)) col.append(h('div', { class: 'now', style: { top: (today.getHours() * 60 + today.getMinutes()) / 60 * HOUR + 'px' } }));
       col.addEventListener('pointerdown', (ev) => { if (ev.target === col && ev.button === 0) createDrag(ev, col, d); });
@@ -249,6 +254,16 @@
         if (+target.start === +e.s && +target.end === +e.e) return;
         await moveEvent(e, target.start, target.end, true);
       };
+      document.addEventListener('pointermove', onMove); document.addEventListener('pointerup', onUp);
+    });
+  }
+  function contResize(el, e, day) {                                            // the morning part of a night: drag its bottom edge to change the wake-up time
+    el.addEventListener('pointerdown', (ev) => {
+      if (ev.button !== 0 || !e.movable || !ev.target.classList.contains('rz')) return;
+      ev.stopPropagation(); let end = null; const r = el.parentNode.getBoundingClientRect();
+      const onMove = (m) => { const mins = Math.max(15, Math.min(24 * 60, Math.round((m.clientY - r.top) / HOUR * 60 / 15) * 15)); end = new Date(day.getTime() + mins * 6e4);
+        el.style.height = Math.max(20, (end - day) / 36e5 * HOUR - 2) + 'px'; };
+      const onUp = async () => { document.removeEventListener('pointermove', onMove); document.removeEventListener('pointerup', onUp); if (end && +end !== +e.e) await moveEvent(e, e.s, end, true); };
       document.addEventListener('pointermove', onMove); document.addEventListener('pointerup', onUp);
     });
   }

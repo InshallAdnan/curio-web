@@ -76,11 +76,8 @@ _LOCK = threading.RLock()
 
 # ───────────────────────── the book ─────────────────────────
 def is_demo():
-    try:
-        import studio_ui
-        return bool(studio_ui.load_cfg().get('myday_demo', True))
-    except Exception:
-        return False
+    """10.29: the made-up demo book is gone — Tracker always shows your own data"""
+    return False
 
 
 def set_demo(on):
@@ -91,8 +88,46 @@ def set_demo(on):
 def path(): return DEMO if is_demo() else REAL
 
 
+DEMO_ACTIVITY = {('figma', 'Client logo — Figma', 'task'), ('chrome', 'YouTube - Figma auto layout tutorial', 'learning'), ('chrome', 'Instagram', 'distraction'),
+                 ('whatsapp', 'WhatsApp', 'distraction'), ('code', 'Curio — Visual Studio Code', 'work'), ('chrome', 'Meta Ads Manager', 'work'),
+                 ('chrome', 'YouTube - funny clips', 'distraction')}
+LOCAL_KEYS = ('coach_', 'watch_', 'night_watch', 'act_', 'drift_min', 'nudge_ai', 'wander', 'work_start', 'work_end', 'sleep_quiet_until')
+
+
+def retire_demo():
+    """10.29: the demo book goes away. While it was on, the PC's screen record and your coach settings were written into it —
+    those (yours, not made-up) move to your own book first. The demo file itself is kept aside in myday/_old (never shown again)."""
+    if not DEMO.exists(): return
+    with _LOCK:
+        if not DEMO.exists(): return
+        try:
+            r = sqlite3.connect(str(REAL), timeout=20); r.executescript(SCHEMA); _add_columns(r)
+            d = sqlite3.connect(str(DEMO), timeout=20); d.row_factory = sqlite3.Row
+            have = {(x[0], x[1]) for x in r.execute('SELECT start, app FROM activity')}
+            n = 0
+            try:
+                for x in d.execute('SELECT * FROM activity ORDER BY start'):
+                    if (x['app'], x['title'], x['cat']) in DEMO_ACTIVITY and x['task_id'] is None: continue        # the made-up day
+                    if (x['start'], x['app']) in have: continue
+                    r.execute('INSERT INTO activity(start, end, app, title, cat, task_id) VALUES(?,?,?,?,?,?)', (x['start'], x['end'], x['app'], x['title'], x['cat'], None)); n += 1
+            except sqlite3.Error: pass
+            mine = {x[0] for x in r.execute('SELECT key FROM settings')}
+            try:
+                for k, v in d.execute('SELECT key, value FROM settings'):
+                    if k.startswith(LOCAL_KEYS) and k not in mine: r.execute('INSERT INTO settings(key, value) VALUES(?,?)', (k, v))
+            except sqlite3.Error: pass
+            r.execute("INSERT OR REPLACE INTO settings(key, value) VALUES('demo_retired', ?)", (stamp(),))
+            r.commit(); r.close(); d.close()
+            old = HOME / '_old'; old.mkdir(exist_ok=True)
+            DEMO.replace(old / f"demo-removed-{now():%Y%m%d-%H%M%S}.db")
+            import logging; logging.info('Tracker: demo removed, %d screen-record rows kept', n)
+        except Exception:
+            import logging; logging.exception('Tracker: removing the demo')
+
+
 def connect(p=None):
     p = Path(p or path()); p.parent.mkdir(parents=True, exist_ok=True)
+    if p.name == REAL.name and DEMO.exists(): retire_demo()
     new = not p.exists()
     if not new and p.name == REAL.name: _copy_before_upgrade(p)
     c = sqlite3.connect(str(p), timeout=20, check_same_thread=False); c.row_factory = sqlite3.Row
@@ -116,7 +151,8 @@ NEW_COLUMNS = [('tasks', 'status', "TEXT DEFAULT 'todo'"), ('habit_log', 'note',
                ('sleep', 'latency', 'INTEGER DEFAULT 0'), ('sleep', 'tags', "TEXT DEFAULT '[]'"),
                ('focus_sessions', 'run', "TEXT DEFAULT ''"), ('focus_sessions', 'intent', "TEXT DEFAULT ''"), ('focus_sessions', 'rating', 'INTEGER'),
                ('tasks', 'series', 'INTEGER'), ('tasks', 'repeat_end', 'TEXT'), ('tasks', 'snooze_until', 'TEXT'),
-               ('sleep', 'auto', 'INTEGER DEFAULT 0'), ('sleep', 'source', "TEXT DEFAULT ''"), ('inspo', 'color', "TEXT DEFAULT ''"), ('nudges', 'brief', "TEXT DEFAULT ''")]
+               ('sleep', 'auto', 'INTEGER DEFAULT 0'), ('sleep', 'source', "TEXT DEFAULT ''"), ('inspo', 'color', "TEXT DEFAULT ''"), ('nudges', 'brief', "TEXT DEFAULT ''"),
+               ('habits', 'etime', 'TEXT'), ('habit_periods', 'etime', 'TEXT')]
 
 
 def _add_columns(c):
@@ -302,7 +338,7 @@ def task_buckets(c, area=None):
 # A habit's plan (which days, what time, reminder, which routine) lives in *periods*: "from … until …".
 # Changing the plan closes the old period and opens a new one, so earlier days keep the plan they really had:
 # a habit added in November never shows October as missed, and a habit you stopped keeps its history.
-PLAN = ('days', 'time', 'remind', 'routine')
+PLAN = ('days', 'time', 'etime', 'remind', 'routine')
 
 
 def _periods(c, hid):
@@ -355,7 +391,9 @@ def habit(c, hid):
 
 
 def _plan(h):
-    return dict(days=json.dumps(sorted(h.get('days') or list(range(7)))), time=h.get('time') or None,
+    t = h.get('time') or None; et = (h.get('etime') or None) if t else None
+    if et and et == t: et = None
+    return dict(days=json.dumps(sorted(h.get('days') or list(range(7)))), time=t, etime=et,
                 remind=int(h.get('remind', -1)), routine=h.get('routine', '') or '')
 
 
@@ -365,28 +403,28 @@ def save_habit(c, h, from_day=None):
     pl = _plan(h)
     if h.get('id'):
         hid = h['id']
-        c.execute('UPDATE habits SET name=?, area_id=?, kind=?, why=?, start_day=COALESCE(?, start_day), routine=?, days=?, time=?, remind=? WHERE id=?',
+        c.execute('UPDATE habits SET name=?, area_id=?, kind=?, why=?, start_day=COALESCE(?, start_day), routine=?, days=?, time=?, etime=?, remind=? WHERE id=?',
                   (h['name'].strip()[:200], h.get('area_id'), h.get('kind', 'build'), h.get('why', ''), h.get('start_day'),
-                   pl['routine'], pl['days'], pl['time'], pl['remind'], hid))
+                   pl['routine'], pl['days'], pl['time'], pl['etime'], pl['remind'], hid))
         cur = c.execute('SELECT * FROM habit_periods WHERE habit_id=? AND end IS NULL ORDER BY start DESC LIMIT 1', (hid,)).fetchone()
         eff = iso(from_day or today())
         if cur is None:
-            c.execute('INSERT INTO habit_periods(habit_id, start, end, days, time, remind, routine) VALUES(?,?,?,?,?,?,?)',
-                      (hid, eff, None, pl['days'], pl['time'], pl['remind'], pl['routine']))
+            c.execute('INSERT INTO habit_periods(habit_id, start, end, days, time, etime, remind, routine) VALUES(?,?,?,?,?,?,?,?)',
+                      (hid, eff, None, pl['days'], pl['time'], pl['etime'], pl['remind'], pl['routine']))
         elif any(str(cur[k]) != str(pl[k]) for k in PLAN):
             if cur['start'] >= eff:                               # the plan only started today (or later): just correct it
-                c.execute('UPDATE habit_periods SET days=?, time=?, remind=?, routine=? WHERE id=?', (pl['days'], pl['time'], pl['remind'], pl['routine'], cur['id']))
-            else:
+                c.execute('UPDATE habit_periods SET days=?, time=?, etime=?, remind=?, routine=? WHERE id=?', (pl['days'], pl['time'], pl['etime'], pl['remind'], pl['routine'], cur['id']))
+            else:                                                 # the days before keep their old days / times — history stays as it was
                 c.execute('UPDATE habit_periods SET end=? WHERE id=?', (iso(date.fromisoformat(eff) - timedelta(days=1)), cur['id']))
-                c.execute('INSERT INTO habit_periods(habit_id, start, end, days, time, remind, routine) VALUES(?,?,?,?,?,?,?)',
-                          (hid, eff, None, pl['days'], pl['time'], pl['remind'], pl['routine']))
+                c.execute('INSERT INTO habit_periods(habit_id, start, end, days, time, etime, remind, routine) VALUES(?,?,?,?,?,?,?,?)',
+                          (hid, eff, None, pl['days'], pl['time'], pl['etime'], pl['remind'], pl['routine']))
     else:
         start = h.get('start_day') or iso(today()); n = c.execute('SELECT COUNT(*) FROM habits').fetchone()[0]
-        hid = c.execute('INSERT INTO habits(name, area_id, kind, routine, days, time, remind, why, start_day, sort, created) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
-                        (h['name'].strip()[:200], h.get('area_id'), h.get('kind', 'build'), pl['routine'], pl['days'], pl['time'], pl['remind'],
+        hid = c.execute('INSERT INTO habits(name, area_id, kind, routine, days, time, etime, remind, why, start_day, sort, created) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
+                        (h['name'].strip()[:200], h.get('area_id'), h.get('kind', 'build'), pl['routine'], pl['days'], pl['time'], pl['etime'], pl['remind'],
                          h.get('why', ''), start, n, stamp())).lastrowid
-        c.execute('INSERT INTO habit_periods(habit_id, start, end, days, time, remind, routine) VALUES(?,?,?,?,?,?,?)',
-                  (hid, start, None, pl['days'], pl['time'], pl['remind'], pl['routine']))
+        c.execute('INSERT INTO habit_periods(habit_id, start, end, days, time, etime, remind, routine) VALUES(?,?,?,?,?,?,?,?)',
+                  (hid, start, None, pl['days'], pl['time'], pl['etime'], pl['remind'], pl['routine']))
     c.commit(); return hid
 
 
@@ -405,8 +443,8 @@ def restart_habit(c, hid):
     if not h: return
     t = iso(today()); last = h['periods'][-1] if h['periods'] else None
     if last and last['end'] and last['end'] >= t: c.execute('UPDATE habit_periods SET end=NULL WHERE id=?', (last['id'],))
-    else: c.execute('INSERT INTO habit_periods(habit_id, start, end, days, time, remind, routine) VALUES(?,?,?,?,?,?,?)',
-                    (hid, t, None, json.dumps(h['days'] or list(range(7))), h['time'], h['remind'] if h['remind'] is not None else -1, h['routine'] or ''))
+    else: c.execute('INSERT INTO habit_periods(habit_id, start, end, days, time, etime, remind, routine) VALUES(?,?,?,?,?,?,?,?)',
+                    (hid, t, None, json.dumps(h['days'] or list(range(7))), h['time'], h.get('etime'), h['remind'] if h['remind'] is not None else -1, h['routine'] or ''))
     c.execute('UPDATE habits SET archived=0 WHERE id=?', (hid,)); c.commit()
 
 
@@ -414,10 +452,23 @@ def archive_habit(c, hid, on=True):
     end_habit(c, hid) if on else restart_habit(c, hid)
 
 
+def time_range(p):
+    """'7:50 AM – 8:10 AM' (or just the start)"""
+    if not p or not p.get('time'): return ''
+    return _t12(p['time']) + (' – ' + _t12(p['etime']) if p.get('etime') else '')
+
+
+def span_minutes(p, default=15):
+    """how long a check-in / habit block is (start → end, past midnight too)"""
+    if not p or not p.get('time') or not p.get('etime'): return default
+    a = int(p['time'][:2]) * 60 + int(p['time'][3:5]); b = int(p['etime'][:2]) * 60 + int(p['etime'][3:5])
+    return (b - a) % (24 * 60) or default
+
+
 def plan_text(p, routine=True):
     days = p['days'] or list(range(7))
     d = 'Every day' if len(days) == 7 else 'Weekdays' if sorted(days) == [0, 1, 2, 3, 4] else ' '.join(WEEKDAYS[x] for x in sorted(days))
-    return '  ·  '.join(x for x in (d, _t12(p['time']) if p['time'] else '', (p['routine'] + ' routine') if p['routine'] and routine else '') if x)
+    return '  ·  '.join(x for x in (d, time_range(p), (p['routine'] + ' routine') if p['routine'] and routine else '') if x)
 
 
 def _t12(s):
@@ -694,6 +745,12 @@ def calendar_events(start, end):
     try:
         out = []
         if setting(c, 'cal_sleep') == '1':
+            try: ensure_recent_nights(c)                         # last night from your template (or the PC), even if Tracker was not opened
+            except Exception: pass
+            for night, b, w in planned_nights(c, start, end):
+                out.append(dict(id=f"myday:plan:{iso(night)}", source='myday', record_id=None, date=b.date(), start=b, end=w, all_day=False,
+                                title=f"Sleep · plan {hm(int((w - b).total_seconds() // 60))}", color='#6d5bd01a', ink='#6d5bd0', readonly=False, mkind='sleepplan', mid=iso(night),
+                                calendar='Tracker · Sleep', detail='every night (your usual times) — drag to change this night'))
             for r in sleeps(c, 400):
                 b, w = datetime.fromisoformat(r['bed']), datetime.fromisoformat(r['wake']); d = b.date()
                 if start <= d <= end or start <= w.date() <= end:
@@ -1380,6 +1437,38 @@ def snooze_task(c, tid, days=3):
 
 
 # auto sleep: last night from your PC (last activity → first activity) or from your usual times
+def usual_night(c, night):
+    """your every-night template for the night that starts on `night` → (bed, wake)"""
+    bg = setting(c, 'sleep_usual_bed') or setting(c, 'bed_goal') or '23:30'; wk = setting(c, 'sleep_usual_wake') or setting(c, 'wake_goal') or '07:00'
+    bed = datetime(night.year, night.month, night.day, int(bg[:2]), int(bg[3:5]))
+    if bed.hour < 12: bed += timedelta(days=1)
+    wake = datetime(night.year, night.month, night.day, int(wk[:2]), int(wk[3:5])) + timedelta(days=1)
+    if wake <= bed: wake += timedelta(days=1)
+    return bed, wake
+
+
+def planned_nights(c, start, end, ahead=14):
+    """nights from your template that are not written yet (tonight and the coming ones) — shown in the calendar
+    so you can see and drag them; each becomes a real night the next morning (or when you move it)"""
+    if setting(c, 'sleep_auto') != '1': return []
+    t = today(); have = {night_of(r['bed']) for r in sleeps(c, 40)}; out = []
+    d = max(start - timedelta(days=1), t - timedelta(days=1))
+    while d <= min(end, t + timedelta(days=ahead)):
+        if d not in have and setting(c, 'auto_slept:' + iso(d)) != '1':
+            b, w = usual_night(c, d)
+            if w > now(): out.append((d, b, w))                    # a night whose morning has passed is filled in for real instead
+        d += timedelta(days=1)
+    return out
+
+
+def write_planned_night(c, night, bed, wake):
+    """a planned night moved in the calendar becomes a real one → its id"""
+    if isinstance(night, str): night = date.fromisoformat(night)
+    rid = c.execute('INSERT INTO sleep(bed, wake, quality, note, latency, tags, auto, source) VALUES(?,?,?,?,?,?,?,?)',
+                    (bed.isoformat(timespec='minutes'), wake.isoformat(timespec='minutes'), 3, '', 0, '[]', 0, 'calendar')).lastrowid
+    set_setting(c, 'auto_slept:' + iso(night), '1'); c.commit(); return rid
+
+
 def ensure_last_night(c, at=None):
     at = at or now()
     if setting(c, 'sleep_auto') != '1': return None
@@ -1396,11 +1485,7 @@ def ensure_last_night(c, at=None):
         gaps = [(acts[i][1], acts[i + 1][0]) for i in range(len(acts) - 1) if (acts[i + 1][0] - acts[i][1]).total_seconds() >= 3 * 3600]
         if gaps:
             bed, wake = max(gaps, key=lambda g: g[1] - g[0]); src = 'PC'
-    if not bed:
-        bg = setting(c, 'sleep_usual_bed') or setting(c, 'bed_goal') or '23:30'; wk = setting(c, 'sleep_usual_wake') or wg
-        bed = datetime(night.year, night.month, night.day, int(bg[:2]), int(bg[3:5]))
-        if bed.hour < 12: bed += timedelta(days=1)
-        wake = datetime(night.year, night.month, night.day, int(wk[:2]), int(wk[3:5])) + timedelta(days=1)
+    if not bed: bed, wake = usual_night(c, night)
     c.execute('INSERT INTO sleep(bed, wake, quality, note, latency, tags, auto, source) VALUES(?,?,?,?,?,?,?,?)',
               (bed.isoformat(timespec='minutes'), wake.isoformat(timespec='minutes'), 3, '', 0, '[]', 1, src))
     set_setting(c, 'auto_slept:' + iso(night), '1'); c.commit(); return src
@@ -1622,6 +1707,9 @@ def calendar_move(kind, rid, start, end, all_day=False):
             old = ('sleep', rid, r['bed'], r['wake'], r['auto'], r['source'])
             end = end or start + (datetime.fromisoformat(r['wake']) - datetime.fromisoformat(r['bed']))
             c.execute("UPDATE sleep SET bed=?, wake=?, auto=0, source='calendar' WHERE id=?", (start.isoformat(timespec='minutes'), end.isoformat(timespec='minutes'), rid))
+        elif kind == 'sleepplan':
+            end = end or start + timedelta(hours=8)
+            new = write_planned_night(c, rid, start, end); old = ('sleepplan', new, str(rid))
         elif kind == 'focus':
             r = c.execute('SELECT start, end, minutes FROM focus_sessions WHERE id=?', (rid,)).fetchone()
             if not r: return None
@@ -1641,6 +1729,7 @@ def calendar_restore(old):
         if k == 'task': c.execute('UPDATE tasks SET day=?, time=?, minutes=? WHERE id=?', (old[2], old[3], old[4], rid))
         elif k == 'sleep': c.execute('UPDATE sleep SET bed=?, wake=?, auto=?, source=? WHERE id=?', (old[2], old[3], old[4], old[5], rid))
         elif k == 'focus': c.execute('UPDATE focus_sessions SET start=?, end=?, minutes=? WHERE id=?', (old[2], old[3], old[4], rid))
+        elif k == 'sleepplan': c.execute('DELETE FROM sleep WHERE id=?', (rid,)); c.execute('DELETE FROM settings WHERE key=?', ('auto_slept:' + old[2],))
         c.commit()
     finally: c.close()
 
