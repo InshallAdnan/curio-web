@@ -14,7 +14,7 @@ import myday as M  # noqa: E402
 from tdb import Snapshot  # noqa: E402
 
 NAMES = ['settings', 'areas', 'tasks', 'habits', 'habit_periods', 'habit_log', 'quit_events', 'sleep', 'notes', 'quotes', 'sent', 'snoozes',
-         'focus_sessions', 'mood', 'focus_events', 'parked', 'inspo', 'activity', 'nudges', 'goals']
+         'focus_sessions', 'mood', 'focus_events', 'parked', 'inspo', 'activity', 'nudges', 'goals', 'ai_chat']
 PFX = 'md_'
 TABLES = [PFX + n for n in NAMES]
 BOOK = Snapshot('tracker', TABLES)
@@ -93,7 +93,7 @@ def home(c, a):
     for x in M.tasks(c):
         if x['day'] in week: week[x['day']].append(dict(id=x['id'], title=x['title'], time=x['time'], done=bool(x['done_at']), color=(ar.get(x['area_id']) or {}).get('color')))
     empty = not c.execute('SELECT 1 FROM tasks LIMIT 1').fetchone() and not c.execute('SELECT 1 FROM habits LIMIT 1').fetchone()
-    return dict(empty=empty, total=s['total'], done=s['done'], timeline=[x for x in tl if x['kind'] != 'quit'], routines=M.routines_today(c), top3=[dict(id=x['id'], title=x['title'], done=bool(x['done_at'])) for x in M.top3(c)],
+    return dict(empty=empty, total=s['total'], done=s['done'], timeline=[x for x in tl if x['kind'] not in ('quit', 'focus')], routines=_routines(c), top3=[dict(id=x['id'], title=x['title'], done=bool(x['done_at'])) for x in M.top3(c)],
                 sleep=_sleep_row(c, sl[0]) if sl else None, quit=[dict(id=h['id'], name=h['name'], days=M.quit_stats(c, h)['days'], best=M.quit_stats(c, h)['best']) for h in q],
                 week=week, colors=M.ROUTINE_COLORS, areas=[dict(id=x['id'], name=x['name'], color=x['color']) for x in M.areas(c)])
 
@@ -121,21 +121,13 @@ def task_save(c, a):
 
 
 def calendar_events(c, a):
-    s, e = _d(a['start']), _d(a['end']); out = M.task_events(c, s, e)
-    try: M.ensure_recent_nights(c)                                  # last night from your every-night times, even if Tracker was not opened
-    except Exception: pass
-    for night, b, w in M.planned_nights(c, s, e):
-        out.append(dict(id=f"myday:plan:{M.iso(night)}", source='myday', date=b.date(), start=b, end=w, all_day=False, mkind='sleepplan', mid=M.iso(night),
-                        title=f"Sleep · plan {M.hm(int((w - b).total_seconds() // 60))}", color='#6d5bd01a', ink='#6d5bd0', calendar='Tracker · Sleep', planned=True))
-    for r in M.sleeps(c, 400):
-        b, w = datetime.fromisoformat(r['bed']), datetime.fromisoformat(r['wake'])
-        if s <= b.date() <= e or s <= w.date() <= e:
-            out.append(dict(id=f"myday:sleep:{r['id']}", source='myday', date=b.date(), start=b, end=w, all_day=False, mkind='sleep', mid=r['id'],
-                            title=f"Sleep · {M.hm(r['minutes'])}", color='#6d5bd033', ink='#6d5bd0', calendar='Tracker · Sleep'))
-    for x in M.sessions(c, s, e):
-        st, en = datetime.fromisoformat(x['start']), datetime.fromisoformat(x['end'])
-        out.append(dict(id=f"myday:focus:{x['id']}", source='myday', date=st.date(), start=st, end=en, all_day=False, mkind='focus', mid=x['id'],
-                        title=f"Focus · {x['title']}", color='#f2602d33', ink='#f2602d', calendar='Tracker · Focus'))
+    """the same Tracker blocks as the desktop Calendar: dated tasks, check-ins / habits that have a time, nights of sleep (planned ones dashed).
+    Focus is switched off for now."""
+    s, e = _d(a['start']), _d(a['end'])
+    out = [x for x in M.calendar_events(s, e, c) if x.get('mgroup') != 'focus']
+    for x in out:
+        if x.get('mkind') == 'sleepplan': x['planned'] = True
+        if x.get('mkind') == 'habit': x['readonly'] = True
     return out
 
 
@@ -167,11 +159,97 @@ def checkins(c, a):
     for h in allh:
         st = M.stats(c, h, 30)
         out.setdefault(h['routine'] or '', []).append(dict(id=h['id'], name=h['name'], time=h['time'], etime=h.get('etime'), due=M.due_on(h, t), state=logs.get(h['id']),
+                                                          late=bool(M.due_on(h, t) and not logs.get(h['id']) and M.time_passed(h, t)),
                                                           history=M.period_lines(h) if len(h['periods']) > 1 else [],
                                                           week=[[M.iso(d), x] for d, x in by[h['id']]['cells']], streak=st['streak'], pct=st['pct'],
                                                           routine=h['routine'], area_id=h['area_id'], days=h['days'], remind=h['remind']))
     return dict(groups=out, order=M.ROUTINES, colors=M.ROUTINE_COLORS, changes=M.habit_changes(c)[:12],
                 stopped=[dict(id=h['id'], name=h['name'], routine=h['routine'], last=(h['periods'][-1]['end'] if h['periods'] else None)) for h in M.habits(c, 'build', archived=True)])
+
+
+def _routines(c):
+    """Home's check-in tiles; late = its time is over and it is not ticked yet (shows red until you tick it)"""
+    r = M.routines_today(c)
+    for items in r.values():
+        for x in items: x['late'] = bool(not x.get('done') and M.time_passed(x))
+    return r
+
+
+# ───────────────────────── boards ─────────────────────────
+def areas_view(c, a):
+    return [dict(id=x['id'], name=x['name'], color=x['color'], **M.area_use(c, x['id'])) for x in M.areas(c)]
+
+
+def area_save(c, a):
+    name = (a.get('name') or '').strip()[:40]
+    if not name: raise ValueError('Give the board a name.')
+    if a.get('id'): M.update_area(c, int(a['id']), name=name, **({'color': a['color']} if a.get('color') else {})); return int(a['id'])
+    return M.add_area(c, name, a.get('color'))
+
+
+def area_delete(c, a):
+    """a board goes; its tasks / check-ins move to the board you picked (nothing of yours is deleted)"""
+    M.delete_area(c, int(a['id']), int(a['move_to']) if a.get('move_to') else None); return True
+
+
+def task_delete(c, a):
+    """a repeating task: only this day's copy goes, the repeat goes on"""
+    tid = int(a['id']); t = M.task(c, tid)
+    if t and t['repeat'] and not t['done_at']: M.ensure_next(c, tid)
+    M.delete_task(c, tid); return True
+
+
+def task_info(c, a):
+    t = M.task(c, int(a['id']))
+    if not t: return None
+    ar = {x['id']: x for x in M.areas(c, True)}; b = ar.get(t['area_id']) or {}
+    return dict(id=t['id'], title=t['title'], area_id=t['area_id'], area=b.get('name'), color=b.get('color'), day=t['day'], time=t['time'], minutes=t['minutes'],
+                repeat=M.repeat_text(t['repeat']) if t['repeat'] else '', note=t['note'], link=t['link'], done=bool(t['done_at']), done_at=t['done_at'],
+                status=t.get('status') or 'todo', areas=[dict(id=x['id'], name=x['name'], color=x['color']) for x in M.areas(c)])
+
+
+# ───────────────────────── Ask AI about a day (the chat is saved, and the AI reads the earlier chats) ─────────────────────────
+AI_SYSTEM = ('You are the user’s kind, honest productivity coach inside their Curio Tracker. Answer in simple Roman Urdu mixed with English, short (max 8 lines), '
+             'specific to the data. Breaks and meals are fine. Never moralise. You remember the earlier chat messages given to you: use what the user told you there '
+             '(their reasons, preferences, what counts as work for them) and do not ask again. Compare with the last days when it helps. '
+             'This is the web: screen time is only recorded on the user’s PC, so a day without screen data is NOT a day of no work — never compare minutes against such days. '
+             'Check-ins whose time passed without a tick: mention them kindly with one practical step.')
+
+
+def ai_day(c, a):
+    d = _d(a.get('day'))
+    return dict(day=M.iso(d), chat=M.chat_day(c, d), saved=M.chat_count(c))
+
+
+def ai_ask(c, a):
+    import ai
+    d = _d(a.get('day')); q = (a.get('question') or '').strip() or 'How did my day go and what one thing should I change tomorrow?'
+    plan = '\n'.join(f"{x['time'] or 'any time'} {x['title']} ({'done' if x['done_at'] else 'open'})" for x in M.tasks(c) if x['day'] == M.iso(d))
+    goals = ', '.join(g['title'] for g in M.goals(c) if not g['done_at'])
+    hs = [h for h in M.habits(c, 'build', on=d) if M.due_on(h, d)]
+    logs = {r['habit_id']: r['state'] for r in c.execute('SELECT habit_id, state FROM habit_log WHERE day=?', (M.iso(d),))}
+    ck = '\n'.join(f"{(h['time'] or '')[:5]} {h['name']}: {logs.get(h['id']) or ('time passed, not ticked' if M.time_passed(h, d) else 'not yet')}" for h in hs)
+    days = '\n'.join(M.day_digest(c, d - timedelta(days=k)) for k in range(7, 0, -1))
+    brief = M.setting(c, 'coach_brief') or ''
+    ctx = (f"Day asked about: {d:%A %d %B %Y}\nPlan for the day:\n{plan or '-'}\nCheck-ins / habits:\n{ck or '-'}\nGoals: {goals or '-'}\n"
+           f"How I want my coach to talk to me: {brief or '-'}\n\nThe 7 days before (to compare):\n{days}")
+    hist = []
+    for m in M.chat_recent(c, 24):
+        role = 'assistant' if m['role'] == 'assistant' else 'user'; txt = (f"[{m['day']}] " if role == 'user' else '') + m['text']
+        if hist and hist[-1]['role'] == role: hist[-1]['content'] += '\n' + txt
+        else: hist.append({'role': role, 'content': txt})
+    while hist and hist[0]['role'] != 'user': hist.pop(0)
+    if hist and hist[-1]['role'] == 'user': hist.append({'role': 'assistant', 'content': '(no answer)'})
+    M.chat_add(c, d, 'user', q)
+    try: txt = ai.respond(hist + [{'role': 'user', 'content': f'{ctx}\n\nQuestion: {q}'}], AI_SYSTEM)
+    except Exception as e: raise ValueError(f'The AI did not answer: {e}. Connect ChatGPT in Ask AI › Settings.')
+    txt = (txt or '').strip() or 'The AI did not answer.'
+    M.chat_add(c, d, 'assistant', txt)
+    return ai_day(c, {'day': M.iso(d)})
+
+
+def ai_clear(c, a):
+    M.chat_clear(c, _d(a['day']) if a.get('day') else None); return True
 
 
 def habit_save(c, a):
@@ -213,7 +291,9 @@ OPS = {
     'calendar': calendar_events, 'calendar_move': calendar_move,
     'timeline': lambda c, a: M.timeline(c, _d(a.get('day'))),
     'task_done': lambda c, a: M.complete(c, int(a['id']), bool(a.get('on', True))),
-    'task_delete': lambda c, a: M.delete_task(c, int(a['id'])),
+    'task_delete': task_delete, 'task_info': task_info,
+    'areas': areas_view, 'area_save': area_save, 'area_delete': area_delete,
+    'ai_day': ai_day, 'ai_ask': ai_ask, 'ai_clear': ai_clear,
     'task': lambda c, a: M.task(c, int(a['id'])),
     'stop_series': lambda c, a: M.stop_series(c, int(a['id'])),
     'restart_series': lambda c, a: M.restart_series(c, int(a['id'])),

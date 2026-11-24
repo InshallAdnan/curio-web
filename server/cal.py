@@ -77,8 +77,10 @@ def view(a):
     try:
         import tracker
         tev = tracker.call('calendar', {'start': start.isoformat(), 'end': end.isoformat()})
-    except Exception: tev = []
-    return dict(events=fev + pev + tev, calendars=cals, sources=cfg['sources'], labels=SOURCE_LABELS, base=base, inks=cs.PAGE_INKS, colors=cs.PAGE_COLORS)
+        trk = [dict(key=f"area:{b['id']}", name=b['name'], color=b['color']) for b in tracker.call('areas', {})] + \
+              [dict(key='checkins', name='Check-ins', color='#0e8fa3'), dict(key='habits', name='Habits', color='#1f9d6b'), dict(key='sleep', name='Sleep', color='#6d5bd0')]
+    except Exception: tev, trk = [], []
+    return dict(events=fev + pev + tev, calendars=cals, sources=cfg['sources'], labels=SOURCE_LABELS, base=base, inks=cs.PAGE_INKS, colors=cs.PAGE_COLORS, tracker=trk)
 
 
 SOURCE_LABELS = {'income': 'Income', 'expense': 'Expenses', 'daily_total': 'Daily total', 'transfer': 'Transfers', 'subscription': 'Upcoming subscriptions'}

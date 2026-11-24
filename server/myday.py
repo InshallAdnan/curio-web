@@ -56,12 +56,13 @@ CREATE TABLE IF NOT EXISTS activity(id INTEGER PRIMARY KEY, start TEXT NOT NULL,
 CREATE INDEX IF NOT EXISTS activity_start ON activity(start);
 CREATE TABLE IF NOT EXISTS nudges(id INTEGER PRIMARY KEY, text TEXT NOT NULL, every INTEGER DEFAULT 45, start TEXT DEFAULT '09:00', end TEXT DEFAULT '23:00',
   days TEXT DEFAULT '[0,1,2,3,4,5,6]', kind TEXT DEFAULT 'timer', active_only INTEGER DEFAULT 1, enabled INTEGER DEFAULT 1, last TEXT);
+CREATE TABLE IF NOT EXISTS ai_chat(id INTEGER PRIMARY KEY, day TEXT NOT NULL, role TEXT NOT NULL, text TEXT NOT NULL, ts TEXT);
 CREATE TABLE IF NOT EXISTS goals(id INTEGER PRIMARY KEY, kind TEXT DEFAULT 'goal', title TEXT NOT NULL, why TEXT DEFAULT '', due TEXT,
   progress INTEGER DEFAULT 0, done_at TEXT, sort REAL DEFAULT 0, created TEXT);
 """
 
 DEFAULTS = {'morning_time': '08:00', 'memory_time': '21:30', 'notify': '1', 'calendar': '1', 'inspo_boards': '[]', 'sleep_goal': '450', 'bed_goal': '23:00',
-            'focus': '', 'focus_break': '45', 'wake_goal': '07:00', 'sleep_auto': '1', 'cal_sleep': '1', 'cal_focus': '1',
+            'focus': '', 'focus_break': '45', 'repeat_past': 'done', 'wake_goal': '07:00', 'sleep_auto': '1', 'cal_sleep': '1', 'cal_focus': '0',
             'watch_all': '1', 'night_watch': '1', 'coach_strict': '2', 'coach_ai': '0', 'coach_ai_every': '30', 'plan_end': '23:00', 'drift_min': '15',
             # focus coach (10.23)
             'coach_ask': '15', 'coach_watch': '1', 'coach_bar': '1', 'coach_idle': '8', 'coach_wander': '1', 'coach_wander_every': '45',
@@ -152,7 +153,7 @@ NEW_COLUMNS = [('tasks', 'status', "TEXT DEFAULT 'todo'"), ('habit_log', 'note',
                ('focus_sessions', 'run', "TEXT DEFAULT ''"), ('focus_sessions', 'intent', "TEXT DEFAULT ''"), ('focus_sessions', 'rating', 'INTEGER'),
                ('tasks', 'series', 'INTEGER'), ('tasks', 'repeat_end', 'TEXT'), ('tasks', 'snooze_until', 'TEXT'),
                ('sleep', 'auto', 'INTEGER DEFAULT 0'), ('sleep', 'source', "TEXT DEFAULT ''"), ('inspo', 'color', "TEXT DEFAULT ''"), ('nudges', 'brief', "TEXT DEFAULT ''"),
-               ('habits', 'etime', 'TEXT'), ('habit_periods', 'etime', 'TEXT')]
+               ('habits', 'etime', 'TEXT'), ('habit_periods', 'etime', 'TEXT'), ('tasks', 'auto', 'INTEGER DEFAULT 0')]
 
 
 def _add_columns(c):
@@ -230,7 +231,7 @@ def _task(r):
 
 def tasks(c, area=None, done=None, cancelled=False):
     q, a = 'SELECT * FROM tasks WHERE 1=1', []
-    if not cancelled: q += " AND COALESCE(status,'') != 'cancelled'"
+    if not cancelled: q += " AND COALESCE(status,'') NOT IN ('cancelled', 'missed')"
     if area: q += ' AND area_id=?'; a.append(area)
     if done is True: q += ' AND done_at IS NOT NULL'
     if done is False: q += ' AND done_at IS NULL'
@@ -290,20 +291,55 @@ def repeat_text(rule):
     return ''
 
 
+def _next_from(rule, base, t0):
+    """the first day on or after t0 in the rhythm that started at `base`"""
+    d = base
+    for _ in range(2000):
+        d = next_day(rule, d)
+        if d is None or d >= t0: return d
+    return None
+
+
+def roll_repeats(c, t0=None):
+    """a repeating task that was not ticked on its day: when the date changes, that day is closed by itself — counted as done
+    (setting repeat_past = 'done', the default) or as missed ('missed') — and the copy for today (or the next day it is due) appears.
+    Closed days stay in the task's history; un-ticking an auto-done day turns it into 'missed'."""
+    t0 = t0 or today(); n = 0
+    mode = setting(c, 'repeat_past') or 'done'
+    rows = c.execute("SELECT id FROM tasks WHERE repeat IS NOT NULL AND done_at IS NULL AND next_id IS NULL AND day IS NOT NULL AND day < ? "
+                     "AND COALESCE(status,'') NOT IN ('cancelled', 'missed')", (iso(t0),)).fetchall()
+    for (tid,) in rows:
+        t = task(c, tid)
+        if not t or not t['repeat']: continue
+        sid = t.get('series') or tid
+        if mode == 'missed': c.execute("UPDATE tasks SET status='missed', auto=1, series=? WHERE id=?", (sid, tid))
+        else: c.execute('UPDATE tasks SET done_at=?, auto=1, series=? WHERE id=?', (t['day'] + 'T' + (t['time'] or '23:59') + ':00', sid, tid))
+        nd = _next_from(t['repeat'], date.fromisoformat(t['day']), t0)
+        if nd and (not t.get('repeat_end') or iso(nd) <= t['repeat_end']):
+            nt = dict(t); nt.pop('id'); nt['day'] = iso(nd); nt['status'] = 'todo'
+            nid = save_task(c, nt); c.execute('UPDATE tasks SET next_id=? WHERE id=?', (nid, tid))
+            c.execute('UPDATE tasks SET series=?, repeat_end=?, auto=0 WHERE id=?', (sid, t.get('repeat_end'), nid))
+        n += 1
+    if n: c.commit()
+    return n
+
+
 def complete(c, tid, on=True):
     t = task(c, tid)
     if not t: return None
     if on and not t['done_at']:
-        c.execute('UPDATE tasks SET done_at=? WHERE id=?', (stamp(), tid))
+        c.execute('UPDATE tasks SET done_at=? WHERE id=?', (done_stamp(t), tid))
         sid = t.get('series') or tid
         if t['repeat'] and not t.get('series'): c.execute('UPDATE tasks SET series=? WHERE id=?', (sid, tid))
         if t['repeat'] and not t['next_id']:
             base = date.fromisoformat(t['day']) if t['day'] else today()
-            nd = next_day(t['repeat'], max(base, today()) if base < today() else base)
+            nd = _next_from(t['repeat'], base, today() + timedelta(days=1)) if base < today() else next_day(t['repeat'], base)
             if nd and (not t.get('repeat_end') or iso(nd) <= t['repeat_end']):
                 nt = dict(t); nt.pop('id'); nt['day'] = iso(nd); nt['status'] = 'todo'
                 nid = save_task(c, nt); c.execute('UPDATE tasks SET next_id=?, series=? WHERE id=?', (nid, sid, tid))
                 c.execute('UPDATE tasks SET series=?, repeat_end=? WHERE id=?', (sid, t.get('repeat_end'), nid))
+    elif not on and t['done_at'] and t.get('auto') and t['next_id']:      # a day closed by itself: un-ticking = not done (the next copy stays)
+        c.execute("UPDATE tasks SET done_at=NULL, status='missed' WHERE id=?", (tid,))
     elif not on and t['done_at']:
         c.execute('UPDATE tasks SET done_at=NULL WHERE id=?', (tid,))
         if t['next_id']:                                      # the copy made when it was ticked — only if never touched
@@ -311,6 +347,43 @@ def complete(c, tid, on=True):
             if n and not n['done_at'] and n['created'] == n['updated']:
                 c.execute('DELETE FROM tasks WHERE id=?', (n['id'],)); c.execute('UPDATE tasks SET next_id=NULL WHERE id=?', (tid,))
     c.commit(); return task(c, tid)
+
+
+def done_stamp(t, at=None):
+    """10.35: when a task counts as done. Ticked after its planned time (even that night or the next day) -> the planned end, not the
+    moment you ticked it. Ticked before it started -> now (you really did it early). No time but a past day -> the end of that day."""
+    now_ = at or now()
+    if not t.get('day'): return stamp()
+    try: d0 = date.fromisoformat(t['day'])
+    except ValueError: return stamp()
+    if t.get('time') and len(t['time']) >= 5:
+        st = datetime.combine(d0, datetime.strptime(t['time'][:5], '%H:%M').time())
+        if now_ < st: return stamp()
+        return min(now_, st + timedelta(minutes=int(t.get('minutes') or 30))).isoformat(timespec='seconds')
+    if d0 < now_.date(): return datetime.combine(d0, datetime.min.time()).replace(hour=23, minute=59).isoformat(timespec='seconds')
+    return stamp()
+
+
+def ensure_next(c, tid):
+    """a repeating task: make sure the next copy exists (so deleting this day's copy does not stop the repeat)"""
+    t = task(c, tid)
+    if not t or not t['repeat'] or t['next_id']: return None
+    base = date.fromisoformat(t['day']) if t['day'] else today(); sid = t.get('series') or tid
+    nd = _next_from(t['repeat'], base, today() + timedelta(days=1)) if base < today() else next_day(t['repeat'], base)
+    if not nd or (t.get('repeat_end') and iso(nd) > t['repeat_end']): return None
+    nt = dict(t); nt.pop('id'); nt['day'] = iso(nd); nt['status'] = 'todo'
+    nid = save_task(c, nt); c.execute('UPDATE tasks SET series=?, repeat_end=? WHERE id=?', (sid, t.get('repeat_end'), nid))
+    c.execute('UPDATE tasks SET next_id=?, series=? WHERE id=?', (nid, sid, tid)); c.commit(); return nid
+
+
+def delete_area(c, aid, move_to=None):
+    """remove a board. Its tasks, check-ins and focus sessions go to board move_to (or stay without a board when None)"""
+    for tb in ('tasks', 'habits', 'focus_sessions'): c.execute(f'UPDATE {tb} SET area_id=? WHERE area_id=?', (move_to, aid))
+    c.execute('DELETE FROM areas WHERE id=?', (aid,)); c.commit()
+
+
+def area_use(c, aid):
+    return {tb: c.execute(f'SELECT COUNT(*) FROM {tb} WHERE area_id=?', (aid,)).fetchone()[0] for tb in ('tasks', 'habits', 'focus_sessions')}
 
 
 def delete_task(c, tid):
@@ -323,6 +396,8 @@ def move_task(c, tid, day, time_=None):
 
 def task_buckets(c, area=None):
     """{'overdue','today','upcoming','someday','done'} → lists"""
+    try: roll_repeats(c)
+    except Exception: import logging; logging.exception('Tracker: rolling repeating tasks')
     t0 = iso(today()); out = {k: [] for k in ('overdue', 'today', 'upcoming', 'someday', 'done')}
     for t in tasks(c, area):
         if t['done_at']: out['done'].append(t); continue
@@ -498,9 +573,20 @@ def set_log(c, hid, d, state, at=None):
         old = c.execute('SELECT ts, note FROM habit_log WHERE habit_id=? AND day=?', (hid, iso(d))).fetchone()
         ts = (iso(d) + 'T' + at) if at else stamp() if d == today() else iso(d)
         if old and old['ts'] and 'T' in old['ts'] and not at and d != today(): ts = old['ts']      # editing a past day keeps the time it had
+        elif not at and state == 'done' and not (old and old['ts'] and 'T' in old['ts']):
+            pt = planned_time(c, hid, d)                    # 10.35: a check-in with a time counts at its planned time, even when ticked later
+            if pt: ts = iso(d) + 'T' + pt
         c.execute('INSERT OR REPLACE INTO habit_log(habit_id, day, state, ts, note) VALUES(?,?,?,?,?)', (hid, iso(d), state, ts, (old['note'] if old else '') or ''))
     else: c.execute('DELETE FROM habit_log WHERE habit_id=? AND day=?', (hid, iso(d)))
     c.commit()
+
+
+def planned_time(c, hid, d):
+    """'HH:MM' the check-in / habit was planned for on day d (its plan that day), or None"""
+    h = next((x for x in habits(c, None, on=d) if x['id'] == hid), None)
+    p = period_on(h, d) if h else None
+    t = (p or {}).get('time') or (h or {}).get('time')
+    return t[:5] if t and len(t) >= 5 and t[2] == ':' else None
 
 
 def toggle(c, hid, d=None):
@@ -739,28 +825,31 @@ def snooze(c, key, title, body, kind, ref, minutes=10):
 
 
 # ───────────────────────── calendar (tasks with a date) ─────────────────────────
-def calendar_events(start, end):
-    """for Curio Calendar: dated tasks, your nights of sleep and focus sessions (routines / namaz / habits are not shown there)"""
-    c = connect()
+def calendar_events(start, end, con=None):
+    """for Curio Calendar: dated tasks, check-ins / habits with a time, your nights of sleep (focus sessions only when cal_focus is on).
+    con: an open connection (Curio Web passes its own); without it this opens and closes myday.db"""
+    c = con or connect()
     try:
         out = []
+        try: roll_repeats(c)
+        except Exception: pass
         if setting(c, 'cal_sleep') == '1':
             try: ensure_recent_nights(c)                         # last night from your template (or the PC), even if Tracker was not opened
             except Exception: pass
             for night, b, w in planned_nights(c, start, end):
-                out.append(dict(id=f"myday:plan:{iso(night)}", source='myday', record_id=None, date=b.date(), start=b, end=w, all_day=False,
-                                title=f"Sleep · plan {hm(int((w - b).total_seconds() // 60))}", color='#6d5bd01a', ink='#6d5bd0', readonly=False, mkind='sleepplan', mid=iso(night),
+                out.append(dict(id=f"myday:plan:{iso(night)}", source='myday', mgroup='sleep', record_id=None, date=b.date(), start=b, end=w, all_day=False,
+                                title="Planned sleep (not logged)", color='#6d5bd01a', ink='#6d5bd0', readonly=False, mkind='sleepplan', mid=iso(night),
                                 calendar='Tracker · Sleep', detail='every night (your usual times) — drag to change this night'))
             for r in sleeps(c, 400):
                 b, w = datetime.fromisoformat(r['bed']), datetime.fromisoformat(r['wake']); d = b.date()
                 if start <= d <= end or start <= w.date() <= end:
-                    out.append(dict(id=f"myday:sleep:{r['id']}", source='myday', record_id=None, date=d, start=b, end=w, all_day=False,
+                    out.append(dict(id=f"myday:sleep:{r['id']}", source='myday', mgroup='sleep', record_id=None, date=d, start=b, end=w, all_day=False,
                                     title=f"Sleep · {hm(r['minutes'])}" + (' (auto)' if r.get('auto') else ''), color='#6d5bd033', ink='#6d5bd0', readonly=False, mkind='sleep', mid=r['id'],
                                     calendar='Tracker · Sleep', detail=''))
         if setting(c, 'cal_focus') == '1':
             for s_ in sessions(c, start, end):
                 st, en = datetime.fromisoformat(s_['start']), datetime.fromisoformat(s_['end'])
-                out.append(dict(id=f"myday:focus:{s_['id']}", source='myday', record_id=s_['task_id'], date=st.date(), start=st, end=en, all_day=False,
+                out.append(dict(id=f"myday:focus:{s_['id']}", source='myday', mgroup='focus', record_id=s_['task_id'], date=st.date(), start=st, end=en, all_day=False,
                                 title=f"Focus · {s_['title']}", color='#f2602d33', ink='#f2602d', readonly=False, mkind='focus', mid=s_['id'], calendar='Tracker · Focus', detail=''))
         if setting(c, 'calendar') != '1': return out
         ar = {a['id']: a for a in areas(c, True)}
@@ -774,11 +863,13 @@ def calendar_events(start, end):
                 h, m = map(int, t['time'].split(':')); s = datetime(d.year, d.month, d.day, h, m)
                 e = s + timedelta(minutes=int(t['minutes'] or 30)); allday = False
             else: s, e, allday = datetime(d.year, d.month, d.day), None, True
-            out.append(dict(id=f"myday:{t['id']}", source='myday', record_id=t['id'], date=d, start=s, end=e, all_day=allday,
+            out.append(dict(id=f"myday:{t['id']}", source='myday', mgroup=f"area:{t['area_id'] or 0}", record_id=t['id'], date=d, start=s, end=e, all_day=allday,
                             title=('✓ ' if t['done_at'] else '') + t['title'], color=col + '33', ink=col, readonly=False, mkind='task', mid=t['id'],
                             calendar='Tracker · ' + (a.get('name') or 'Tasks'), detail=repeat_text(t['repeat'])))
+        out += habit_events(c, start, end, ar)
         return out
-    finally: c.close()
+    finally:
+        if con is None: c.close()
 
 
 
@@ -1311,7 +1402,7 @@ def series_list(c):
         last = ts[-1]; rule = json.loads(last['repeat']) if last['repeat'] else None
         rules = [json.loads(t['repeat']) for t in ts if t['repeat']]
         if not rule and not rules: continue
-        open_ = [t for t in ts if not t['done_at'] and (t['status'] or '') != 'cancelled']
+        open_ = [t for t in ts if not t['done_at'] and (t['status'] or '') not in ('cancelled', 'missed')]
         done = [t for t in ts if t['done_at']]
         days = sorted(t['day'] for t in ts if t['day'])
         end = (open_[0].get('repeat_end') if open_ else last.get('repeat_end')) or ''
@@ -1321,6 +1412,7 @@ def series_list(c):
         out.append(dict(id=sid, title=last['title'], area=(ar.get(last['area_id']) or {}).get('name', ''), color=(ar.get(last['area_id']) or {}).get('color'),
                         rule=repeat_text(rule or rules[-1]), rule_raw=rule or rules[-1], started=days[0] if days else (ts[0]['created'] or '')[:10],
                         done=len(done), last_done=max((t['done_at'] or '')[:10] for t in done) if done else '', next=open_[0]['day'] if open_ else '',
+                        missed=sum(1 for t in ts if (t['status'] or '') == 'missed'), auto=sum(1 for t in ts if t['done_at'] and t.get('auto')),
                         open_id=open_[0]['id'] if open_ else None, end=end, state=state, time=last['time'],
                         stopped=max(((t['updated'] or '')[:10] for t in ts if (t['status'] or '') == 'cancelled'), default='')))
     out.sort(key=lambda x: (x['state'] != 'running', x['title'].lower()))
@@ -1328,7 +1420,7 @@ def series_list(c):
 
 
 def series_history(c, sid):
-    return [dict(r) for r in c.execute("SELECT id, day, time, done_at, status FROM tasks WHERE series=? OR id=? ORDER BY day DESC, id DESC", (sid, sid))]
+    return [dict(r) for r in c.execute("SELECT id, day, time, done_at, status, auto FROM tasks WHERE series=? OR id=? ORDER BY day DESC, id DESC", (sid, sid))]
 
 
 def stop_series(c, sid, end_day=None):
@@ -1371,6 +1463,8 @@ def rel_time(target, at=None):
 
 def timeline(c, d=None):
     """everything planned (and done) on one day, in time order, each with a type tag — the one place to look (for you and the AI)"""
+    try: roll_repeats(c)
+    except Exception: pass
     d = d or today(); D = iso(d); out = []; ar = {a['id']: a for a in areas(c, True)}; t_now = now()
     logs = {r['habit_id']: dict(r) for r in c.execute('SELECT * FROM habit_log WHERE day=?', (D,))}
 
@@ -1447,10 +1541,18 @@ def usual_night(c, night):
     return bed, wake
 
 
-def planned_nights(c, start, end, ahead=14):
+def usual_ok(c):
+    """None when the every-night times make sense, else a short reason (e.g. 1:25 PM picked instead of 1:25 AM)"""
+    b, w = usual_night(c, today()); h = (w - b).total_seconds() / 3600
+    if h > 14: return f"{_t12(b.strftime('%H:%M'))} → {_t12(w.strftime('%H:%M'))} is {int(h)}h {int(h * 60) % 60:02d}m — did you mean {_t12(((b + timedelta(hours=12)).strftime('%H:%M')))}?"
+    if h < 2: return 'less than 2 hours between bed and up'
+    return None
+
+
+def planned_nights(c, start, end, ahead=0):
     """nights from your template that are not written yet (tonight and the coming ones) — shown in the calendar
     so you can see and drag them; each becomes a real night the next morning (or when you move it)"""
-    if setting(c, 'sleep_auto') != '1': return []
+    if setting(c, 'sleep_auto') != '1' or usual_ok(c): return []
     t = today(); have = {night_of(r['bed']) for r in sleeps(c, 40)}; out = []
     d = max(start - timedelta(days=1), t - timedelta(days=1))
     while d <= min(end, t + timedelta(days=ahead)):
@@ -1485,7 +1587,9 @@ def ensure_last_night(c, at=None):
         gaps = [(acts[i][1], acts[i + 1][0]) for i in range(len(acts) - 1) if (acts[i + 1][0] - acts[i][1]).total_seconds() >= 3 * 3600]
         if gaps:
             bed, wake = max(gaps, key=lambda g: g[1] - g[0]); src = 'PC'
-    if not bed: bed, wake = usual_night(c, night)
+    if not bed:
+        if usual_ok(c): return None                                                  # the every-night times look wrong — write nothing
+        bed, wake = usual_night(c, night)
     c.execute('INSERT INTO sleep(bed, wake, quality, note, latency, tags, auto, source) VALUES(?,?,?,?,?,?,?,?)',
               (bed.isoformat(timespec='minutes'), wake.isoformat(timespec='minutes'), 3, '', 0, '[]', 1, src))
     set_setting(c, 'auto_slept:' + iso(night), '1'); c.commit(); return src
@@ -1497,6 +1601,35 @@ DEFAULT_RULES = {'work': ['figma', 'photoshop', 'illustrator', 'indesign', 'afte
                           'hermes', 'obsidian', 'curio', 'lightroom', 'blender', 'davinci'],
                  'learning': ['course', 'tutorial', 'lesson', 'udemy', 'coursera', 'skillshare', 'class'],
                  'private': ['bank', 'password', 'wallet', 'easypaisa', 'jazzcash', 'incognito', 'inprivate']}
+
+
+# 10.36: sites the user asked Curio to catch (kept scrambled so the words never show up anywhere). Their window titles are never stored.
+import codecs as _codecs
+FLAG_WORDS = [_codecs.decode(w, 'rot13') for w in (
+    'cbea', 'kivqrbf', 'kakk', 'kunzfgre', 'erqghor', 'lbhcbea', 'bayslnaf', 'oenmmref', 'fcnaxonat', 'rcbeare', 'pungheongr', 'fgevcpung',
+    'uragnv', 'afsj', 'kkk', 'ehyr34', 'sncryyb', 'zbgureyrff', 'gansyvk', 'lbhwvmm', 'gunzomvyyn', 'rebgvp', 'pnztvey', 'kunzfgreyvir', 'zlserrpnzf')]
+WATCH_WORDS = ['youtube', 'netflix', 'prime video', 'vlc', 'media player', 'movies & tv', 'potplayer', 'mpv', 'twitch', 'vimeo', 'dailymotion',
+               'zoom meeting', 'google meet', 'microsoft teams', 'disney+', 'hotstar', 'tamasha', 'mx player', 'kmplayer']
+
+
+def is_flagged(app, title):
+    hay = f' {app or ""} {title or ""} '.lower()
+    return any(w in hay for w in FLAG_WORDS)
+
+
+def is_watching(app, title):
+    """a video / call is in front — no mouse or keyboard is normal then, so it is not 'away'"""
+    hay = f' {app or ""} {title or ""} '.lower()
+    return any(w in hay for w in WATCH_WORDS)
+
+
+def time_passed(h, d=None, at=None):
+    """a check-in / habit whose planned time is over on day d (any earlier day counts as over)"""
+    at = at or now(); d = d or at.date()
+    if d < at.date(): return True
+    if d > at.date() or not h.get('time') or len(h['time']) < 5: return False
+    st = datetime.combine(d, datetime.strptime(h['time'][:5], '%H:%M').time())
+    return at >= st + timedelta(minutes=span_minutes(h))
 
 
 def act_rules(c):
@@ -1512,7 +1645,8 @@ def act_rules(c):
 
 def add_activity(c, start, end, app, title, cat, task_id=None):
     """one sample of what was on screen; joins it to the last span when it is the same window"""
-    if cat == 'private': title = ''
+    if cat in ('private', 'flagged'): title = ''
+    if cat == 'away': app, title = '', ''
     last = c.execute('SELECT * FROM activity ORDER BY id DESC LIMIT 1').fetchone()
     if last and last['app'] == app and last['title'] == title[:200] and (start - datetime.fromisoformat(last['end'])).total_seconds() <= 45:
         c.execute('UPDATE activity SET end=? WHERE id=?', (end.isoformat(timespec='seconds'), last['id']))
@@ -1529,11 +1663,13 @@ def activity_day(c, d=None):
     cats, apps, tks, titles = {}, {}, {}, {}
     for r in rows:
         s_ = max(lo, datetime.fromisoformat(r['start'])); e_ = min(hi, datetime.fromisoformat(r['end'])); m = max(0.0, (e_ - s_).total_seconds() / 60)
-        cats[r['cat']] = cats.get(r['cat'], 0) + m; apps[r['app'] or '?'] = apps.get(r['app'] or '?', 0) + m
+        cats[r['cat']] = cats.get(r['cat'], 0) + m
+        if r['cat'] == 'away': continue                               # time away from the PC is not screen time
+        apps[r['app'] or '?'] = apps.get(r['app'] or '?', 0) + m
         if r['task_id']: tks[r['task_id']] = tks.get(r['task_id'], 0) + m
         if r['title']: k = (r['app'], r['title'][:90]); titles[k] = titles.get(k, 0) + m
     rnd = lambda dct: {k: round(v) for k, v in sorted(dct.items(), key=lambda x: -x[1]) if v >= 1}
-    return dict(total=round(sum(cats.values())), cats=rnd(cats), apps=dict(list(rnd(apps).items())[:12]), tasks=rnd(tks),
+    return dict(total=round(sum(v for k, v in cats.items() if k != 'away')), away=round(cats.get('away', 0)), flagged=round(cats.get('flagged', 0)), cats=rnd(cats), apps=dict(list(rnd(apps).items())[:12]), tasks=rnd(tks),
                 windows=[dict(app=a, title=t, min=round(m)) for (a, t), m in sorted(titles.items(), key=lambda x: -x[1])[:15] if m >= 1],
                 first=rows[0]['start'][11:16] if rows else '', last=rows[-1]['end'][11:16] if rows else '', spans=rows)
 
@@ -1768,7 +1904,7 @@ def open_loops(c, min_days=1, limit=4):
 
 
 # activity: your own corrections win ("Canva is work", "that was dinner, not a distraction")
-ACT_CATS = ['task', 'work', 'learning', 'break', 'distraction', 'other', 'private']
+ACT_CATS = ['task', 'work', 'learning', 'break', 'distraction', 'other', 'private', 'away', 'flagged']
 
 
 def act_overrides(c):
@@ -1781,6 +1917,7 @@ def classify(c, app, title, open_tasks=None):
     distraction / learning / work words / other"""
     if not app and not title: return 'away', None
     hay = f' {app} {title} '.lower(); R = act_rules(c); app_l = f' {(app or "").lower()} '
+    if is_flagged(app, title): return 'flagged', None
     for o in act_overrides(c):
         if o.get('match') and o['match'].lower() in hay: return o.get('cat', 'work'), o.get('task_id')
     if any(w and w in hay for w in R['private']): return 'private', None
@@ -1942,3 +2079,194 @@ def task_events(c, start, end, area=None):
                         title=('✓ ' if t['done_at'] else '') + t['title'], color=col + '33', ink=col, readonly=False, calendar=a.get('name') or 'Tasks',
                         detail=repeat_text(t['repeat'])))
     return out
+
+
+
+# ───────────────────────── 10.32: the Calendar as a second home for the Tracker ─────────────────────────
+def habit_events(c, start, end, ar=None):
+    """check-ins and habits that have a time, as blocks on each day they are due (that day's own plan and times)"""
+    ar = ar if ar is not None else {a['id']: a for a in areas(c, True)}; out = []
+    hs = [_habit(c, r) for r in c.execute("SELECT * FROM habits WHERE kind='build' ORDER BY sort, id")]
+    logs = {(r[0], r[1]): r[2] for r in c.execute('SELECT habit_id, day, state FROM habit_log WHERE day BETWEEN ? AND ?', (iso(start), iso(end)))}
+    d = start
+    while d <= end:
+        for h in hs:
+            p = period_on(h, d)
+            if not p or not p['time'] or d.weekday() not in (p['days'] or list(range(7))): continue
+            a_ = datetime.combine(d, datetime.strptime(p['time'], '%H:%M').time()); b_ = a_ + timedelta(minutes=span_minutes(p))
+            st = logs.get((h['id'], iso(d))); rt = p.get('routine') or ''
+            col = ROUTINE_COLORS.get(rt) or (ar.get(h['area_id']) or {}).get('color') or '#1f9d6b'
+            out.append(dict(id=f"myday:habit:{h['id']}:{iso(d)}", source='myday', mgroup='checkins' if rt else 'habits', record_id=None, date=d,
+                            start=a_, end=b_, all_day=False, title=('✓ ' if st == 'done' else '') + h['name'], color=col + '33', ink=col,
+                            readonly=True, mkind='habit', mid=f"{h['id']}|{iso(d)}", calendar='Tracker · ' + (f'Check-ins · {rt}' if rt else 'Habits'), detail=''))
+        d += timedelta(days=1)
+    return out
+
+
+_TABLES = {'task': 'tasks', 'sleep': 'sleep', 'focus': 'focus_sessions'}
+
+
+def _snap(c, table, rid):
+    r = c.execute(f'SELECT * FROM {table} WHERE id=?', (rid,)).fetchone(); return dict(r) if r else None
+
+
+def calendar_copy(kind, rid, start, end=None, all_day=False):
+    """Ctrl / Alt + drag (or Duplicate / Paste) in the Calendar: a copy at the new place → its undo record ('created', table, id)"""
+    c = connect()
+    try:
+        if kind == 'task':
+            t = task(c, rid)
+            if not t: return None
+            mins = int((end - start).total_seconds() // 60) if (end and not all_day) else int(t['minutes'] or 30)
+            nid = c.execute('INSERT INTO tasks(title, area_id, day, time, minutes, repeat, remind, note, link, priority, status, created, updated) '
+                            'VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)', (t['title'], t['area_id'], iso(start.date()), None if all_day else start.strftime('%H:%M'),
+                            max(5, mins), None, t['remind'] if t['remind'] is not None else -1, t.get('note') or '', t.get('link') or '',
+                            int(t.get('priority') or 0), 'todo', stamp(), stamp())).lastrowid
+            c.commit(); return ('created', 'tasks', nid)
+        if kind == 'sleep':
+            r = _snap(c, 'sleep', rid)
+            if not r: return None
+            end = end or start + (datetime.fromisoformat(r['wake']) - datetime.fromisoformat(r['bed']))
+            nid = c.execute("INSERT INTO sleep(bed, wake, quality, note, latency, tags, auto, source) VALUES(?,?,?,?,?,?,0,'calendar')",
+                            (start.isoformat(timespec='minutes'), end.isoformat(timespec='minutes'), r['quality'], r['note'] or '', r.get('latency') or 0, r.get('tags') or '[]')).lastrowid
+            set_setting(c, 'auto_slept:' + iso(night_of(start.isoformat(timespec='minutes'))), '1'); c.commit(); return ('created', 'sleep', nid)
+        if kind == 'focus':
+            r = _snap(c, 'focus_sessions', rid)
+            if not r: return None
+            end = end or start + (datetime.fromisoformat(r['end']) - datetime.fromisoformat(r['start']))
+            nid = c.execute('INSERT INTO focus_sessions(task_id, title, area_id, start, end, minutes) VALUES(?,?,?,?,?,?)',
+                            (r['task_id'], r['title'], r['area_id'], start.isoformat(timespec='seconds'), end.isoformat(timespec='seconds'),
+                             max(1, int((end - start).total_seconds() // 60)))).lastrowid
+            c.commit(); return ('created', 'focus_sessions', nid)
+        return None
+    finally: c.close()
+
+
+def calendar_delete(kind, rid):
+    """Delete in the Calendar → its undo record ('deleted', table, row). Check-ins / habits are never deleted from here."""
+    table = _TABLES.get(kind)
+    if not table: return None
+    c = connect()
+    try:
+        r = _snap(c, table, rid)
+        if not r: return None
+        c.execute(f'DELETE FROM {table} WHERE id=?', (rid,)); c.commit(); return ('deleted', table, r)
+    finally: c.close()
+
+
+def calendar_undo(rec):
+    """undo a copy / delete made in the Calendar"""
+    c = connect()
+    try:
+        k, table = rec[0], rec[1]
+        if table not in _TABLES.values(): return
+        if k == 'created': c.execute(f'DELETE FROM {table} WHERE id=?', (rec[2],))
+        elif k == 'deleted':
+            r = rec[2]; cols = list(r.keys())
+            c.execute(f'INSERT OR REPLACE INTO {table} ({",".join(cols)}) VALUES ({",".join("?" * len(cols))})', [r[x] for x in cols])
+        c.commit()
+    finally: c.close()
+
+
+def calendar_toggle(kind, mid):
+    """tick / untick from the Calendar: a task, or a check-in / habit on its day"""
+    c = connect()
+    try:
+        if kind == 'task':
+            t = task(c, mid)
+            if t: complete(c, mid, not t['done_at'])
+        elif kind == 'habit':
+            hid, d = str(mid).split('|'); toggle(c, int(hid), date.fromisoformat(d))
+    finally: c.close()
+
+
+def calendar_info(kind, mid):
+    """[(name, value)] for the Calendar's details panel"""
+    c = connect()
+    try:
+        ar = {a['id']: a for a in areas(c, True)}
+        if kind == 'task':
+            t = task(c, mid)
+            if not t: return []
+            out = [('Board', (ar.get(t['area_id']) or {}).get('name') or '—'), ('Status', 'Done' if t['done_at'] else dict(STATUSES).get(task_status(t), 'To do')),
+                   ('Length', f"{int(t['minutes'] or 30)} min")]
+            if t['repeat']: out.append(('Repeats', repeat_text(t['repeat'])))
+            if t.get('note'): out.append(('Note', t['note']))
+            return out
+        if kind == 'sleep':
+            r = next((x for x in sleeps(c, 400) if x['id'] == mid), None)
+            if not r: return []
+            g, _col = sleep_grade(c, r['minutes'])
+            return [('Slept', hm(r['minutes'])), ('Grade', g), ('Filled by', {'PC': 'the PC (quiet time)', 'usual times': 'your usual times', 'calendar': 'you (Calendar)'}.get(r.get('source') or '', 'you'))]
+        if kind == 'focus':
+            r = _snap(c, 'focus_sessions', mid)
+            return [('Task', r['title'] or 'Focus'), ('Minutes', str(r['minutes']))] if r else []
+        if kind == 'habit':
+            hid, d = str(mid).split('|'); h = habit(c, int(hid)); day = date.fromisoformat(d)
+            if not h: return []
+            p = period_on(h, day) or {}
+            st = c.execute('SELECT state FROM habit_log WHERE habit_id=? AND day=?', (h['id'], d)).fetchone()
+            return [('Type', ('Check-in · ' + p['routine']) if p.get('routine') else 'Habit'), ('Time', time_range(p) or '—'), ('Plan', plan_text(p, False)),
+                    ('That day', 'Done' if st and st[0] == 'done' else 'Skipped' if st and st[0] == 'skip' else 'Not ticked')]
+        if kind == 'sleepplan': return [('What', 'Your every-night times — not logged yet'), ('Change', 'drag it, or Tracker › Sleep › Change usual times')]
+        return []
+    finally: c.close()
+
+
+def board_items(group, show='nodate'):
+    """the Calendar's side panel for a Tracker calendar: tasks of a board ('area:3') — no date first, or upcoming, or all open"""
+    c = connect()
+    try:
+        if not str(group).startswith('area:'): return []
+        aid = int(group.split(':')[1]) or None; t0 = iso(today()); out = []
+        lo, hi = iso(today() - timedelta(days=7)), iso(today() + timedelta(days=7))
+        for t in tasks(c, done=None if show == 'recent' else False):
+            if (t['area_id'] or None) != aid: continue
+            if show == 'nodate' and t['day']: continue
+            if show == 'upcoming' and (not t['day'] or t['day'] < t0): continue
+            if show == 'recent' and not (t['day'] and lo <= t['day'] <= hi) and not (not t['day'] and not t['done_at']): continue
+            out.append(dict(kind='task', id=t['id'], title=('✓ ' if t['done_at'] else '') + t['title'], day=t['day'], time=t['time'], minutes=t['minutes'],
+                            status='Done' if t['done_at'] else dict(STATUSES).get(task_status(t), 'To do'), repeat=repeat_text(t['repeat'])))
+        if show == 'recent':                                           # today first, then the coming days, then the last days, then no date
+            out.sort(key=lambda x: (0, x['time'] or '') if x['day'] == t0 else (1, x['day'], x['time'] or '') if x['day'] and x['day'] > t0
+                     else (2, ''.join(chr(255 - ord(ch)) for ch in x['day']), '') if x['day'] else (3, '', ''))
+        return out
+    finally: c.close()
+
+
+
+# ───────────────────────── 10.34: Plan › Ask AI remembers what you talked about ─────────────────────────
+def chat_add(c, d, role, text):
+    c.execute('INSERT INTO ai_chat(day, role, text, ts) VALUES(?,?,?,?)', (iso(d), role, (text or '').strip()[:6000], stamp())); c.commit()
+
+
+def chat_day(c, d): return [dict(r) for r in c.execute('SELECT * FROM ai_chat WHERE day=? ORDER BY id', (iso(d),))]
+
+
+def chat_recent(c, n=24):
+    """the last n messages of every day, oldest first — the AI reads them before it answers"""
+    return [dict(r) for r in c.execute('SELECT * FROM ai_chat ORDER BY id DESC LIMIT ?', (n,))][::-1]
+
+
+def chat_count(c): return c.execute('SELECT COUNT(*) FROM ai_chat').fetchone()[0]
+
+
+def chat_clear(c, d=None):
+    if d is None: c.execute('DELETE FROM ai_chat')
+    else: c.execute('DELETE FROM ai_chat WHERE day=?', (iso(d),))
+    c.commit()
+
+
+def day_digest(c, d):
+    """one short line about a day, for the AI: screen time by kind, tasks done / left, check-ins done / due, sleep"""
+    a = activity_day(c, d)
+    cats = (', '.join(f"{k} {v}m" for k, v in sorted(a['cats'].items(), key=lambda x: -x[1])[:5]) if a['total'] >= 10
+            else 'PC not used or not recorded (NOT a sign of no work: office / phone / away)')
+    ts = [x for x in tasks(c, cancelled=True) if x['day'] == iso(d)]
+    dn = [x['title'] for x in ts if x['done_at']]; left = [x['title'] for x in ts if not x['done_at']]
+    hs = [h for h in habits(c, 'build', on=d) if due_on(h, d)]
+    logs = {r[0]: r[1] for r in c.execute('SELECT habit_id, state FROM habit_log WHERE day=?', (iso(d),))}
+    missed = [h['name'] for h in hs if logs.get(h['id']) != 'done']
+    sl = next((r for r in sleeps(c, 20) if night_of(r['bed']) == d - timedelta(days=1)), None)
+    return (f"{d:%a %d %b}: screen {cats}; tasks done {len(dn)} ({', '.join(dn[:5]) or '-'}), left {len(left)} ({', '.join(left[:5]) or '-'}); "
+            f"check-ins/habits {len(hs) - len(missed)}/{len(hs)}" + (f" (missed: {', '.join(missed[:6])})" if missed else '') + (f"; slept {hm(sl['minutes'])}" if sl else ''))

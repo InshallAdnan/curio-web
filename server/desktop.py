@@ -121,7 +121,7 @@ def pull(part):
         body = {'ok': True, 'part': 'pages', 'rev': rev['pages'], 'tables': data, 'files': files}
     elif part == 'tracker':
         # the Tracker book, table names as on the desktop (without md_); the screen record (activity) stays on each PC
-        names = [n for n in tracker.NAMES if n != 'activity']
+        names = [n for n in tracker.NAMES if n not in ('activity', 'ai_chat')]    # the PC keeps its own screen record and its own AI chat
         data = tracker.run(lambda c: _dump(c._c, [tracker.PFX + n for n in names]))
         body = {'ok': True, 'part': 'tracker', 'rev': rev['tracker'], 'tables': {k[len(tracker.PFX):]: v for k, v in data.items()}}
     else:

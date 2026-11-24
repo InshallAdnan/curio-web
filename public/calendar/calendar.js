@@ -74,17 +74,19 @@
     if (!end) end = allDay ? start : new Date(start.getTime() + 3600e3);
     const ink = (isPage || isMd) ? e.ink : (SRC_INK[e.source] || '#64748b');
     const bg = dark() ? ink + '33' : (isPage ? e.color : isMd ? ink + '22' : ink + '14');
-    const movable = isPage || isMd || ['income', 'expense', 'transfer'].includes(e.source);
-    return Object.assign({}, e, { isPage, isMd, allDay, s: start, e: end, ink, bg, movable });
+    const movable = isPage || (isMd && !e.readonly) || ['income', 'expense', 'transfer'].includes(e.source);
+    const past = e.source !== 'daily_total' && (allDay ? startOfDay(end) < startOfDay(new Date()) : end <= new Date());   // over: shown lighter, like Notion
+    return Object.assign({}, e, { isPage, isMd, allDay, s: start, e: end, ink, bg, movable, past });
   }
   let EV = [];
+  const trkOn = (e) => { const off = store('trk_off') || {}; return !(e.isMd && off[e.mgroup || '']); };
   const dayEvents = (d) => EV.filter(e => e.allDay ? (startOfDay(e.s) <= d && d <= startOfDay(e.e)) : sameDay(e.s, d));
 
   async function load() {
     const [a, b] = range();
     try { S.data = await cal('view', { start: ymd(a), end: ymd(b) }); }
     catch (e) { toast(e.message); return; }
-    EV = S.data.events.map(norm).sort((x, y) => x.s - y.s || (x.source === 'daily_total') - (y.source === 'daily_total'));
+    EV = S.data.events.map(norm).filter(trkOn).sort((x, y) => x.s - y.s || (x.source === 'daily_total') - (y.source === 'daily_total'));
     if (S.sel && !EV.find(e => e.id === S.sel)) S.sel = null;
     render();
   }
@@ -134,9 +136,13 @@
       onclick: async (e) => { if (e.target.closest('.dots')) return; await cal('set_page', { db: c.id, on: !c.on }).catch(x => toast(x.message)); load(); } },
       h('span', { class: 'box' }), h('span', { class: 'nm' }, (c.icon && c.icon.length <= 2 ? c.icon + '  ' : '') + c.title),
       h('button', { class: 'dots', title: 'Options', onclick: (e) => pageMenu(e.currentTarget, c) }, '⋯')));
+    const off = store('trk_off') || {};
+    const trkRows = (D.tracker || []).map(t => h('div', { class: 'src' + (off[t.key] ? '' : ' on'), style: { '--c': t.color }, title: 'Click to show / hide',
+      onclick: () => { const o = store('trk_off') || {}; o[t.key] = !o[t.key]; store('trk_off', o); load(); } }, h('span', { class: 'box' }), h('span', { class: 'nm' }, t.name)));
     put(L, mini, h('div', { class: 'sec' }, h('span', {}, 'Finance')), srcRows,
       h('div', { class: 'sec' }, h('span', {}, 'Pages databases'), h('button', { title: 'Add a Pages database as a calendar', onclick: openPicker }, '+')),
-      pageRows.length ? pageRows : h('div', { class: 'hint' }, 'No Pages database here yet.\nClick + to pick one from Pages, or paste\nits link (view menu › Copy link to view).'));
+      pageRows.length ? pageRows : h('div', { class: 'hint' }, 'No Pages database here yet.\nClick + to pick one from Pages, or paste\nits link (view menu › Copy link to view).'),
+      trkRows.length ? [h('div', { class: 'sec' }, h('span', {}, 'Tracker')), trkRows] : null);
   }
   function pageMenu(at, c) {
     const D = S.data, names = ['Blue', 'Pink', 'Green', 'Yellow', 'Purple', 'Teal', 'Orange', 'Grey'];
@@ -159,7 +165,7 @@
   // grid
   function chip(e) {
     const total = e.source === 'daily_total';
-    const el = h('div', { class: 'chip' + (total ? ' total' : '') + (S.sel === e.id ? ' sel' : ''), style: { '--ink': e.ink, '--bgc': e.bg }, 'data-id': e.id, title: e.title + (e.detail ? '  ' + e.detail : '') },
+    const el = h('div', { class: 'chip' + (total ? ' total' : '') + (e.past ? ' past' : '') + (S.sel === e.id ? ' sel' : ''), style: { '--ink': e.ink, '--bgc': e.bg }, 'data-id': e.id, title: tip(e) },
       e.isPage && e.icon && e.icon.length <= 2 ? h('span', {}, e.icon) : null, h('span', {}, total ? `Net ${e.detail}` : e.title + (e.detail && !e.isPage ? '  ' + e.detail.replace('+', '').replace('−', '−') : '')));
     attachDrag(el, e); return el;
   }
@@ -180,13 +186,15 @@
       const d0 = startOfDay(d), d1 = addDays(d0, 1);
       const timed = [...dayEvents(d).filter(e => !e.allDay),                       // + the morning part of a night (or anything) that started yesterday
         ...EV.filter(e => !e.allDay && e.s < d0 && e.e > d0).map(e => Object.assign(Object.create(Object.getPrototypeOf(e)), e, { cont: true }))];
-      const lanes = [], ends = []; timed.forEach(e => { let l = ends.findIndex(t => t <= e.s); if (l < 0) { l = ends.length; ends.push(0); } ends[l] = e.e; lanes.push(l); });
-      const n = Math.max(1, ends.length);
-      timed.forEach((e, i) => {
-        const vs = e.cont ? d0 : e.s, ve = e.e > d1 ? d1 : e.e;                   // the part of it that falls on this day
-        const top = (vs.getHours() * 60 + vs.getMinutes()) / 60 * HOUR, mins = Math.max(20, (ve - vs) / 6e4);
-        const el = h('div', { class: 'ev' + (e.planned ? ' plan' : '') + (S.sel === e.id ? ' sel' : ''), 'data-id': e.id, style: { '--ink': e.ink, '--bgc': e.bg, top: top + 'px', height: Math.max(20, mins / 60 * HOUR - 2) + 'px', left: `calc(${lanes[i] / n * 100}% + 2px)`, width: `calc(${100 / n}% - 4px)` } },
-          h('b', {}, (e.icon && e.icon.length <= 2 ? e.icon + ' ' : '') + e.title), h('small', {}, `${ampm(e.s)} – ${ampm(e.e)}`), e.isMd ? h('div', { class: 'rz rzt' }) : null, (e.isPage || e.isMd) ? h('div', { class: 'rz' }) : null);
+      const lay = nest(timed, d0, d1);
+      lay.forEach((it) => {
+        const e = it.e, vs = e.cont ? d0 : e.s;                                  // the part of it that falls on this day
+        const top = (vs.getHours() * 60 + vs.getMinutes()) / 60 * HOUR, px = Math.max(it.short ? 12 : 18, (it.b - it.a) / 60 * HOUR - 2);
+        const g = place(it), narrow = it.count > 1 || it.depth;
+        const el = h('div', { class: 'ev' + (e.planned ? ' plan' : '') + (e.past ? ' past' : '') + (narrow ? ' stack' : '') + (S.sel === e.id ? ' sel' : ''), 'data-id': e.id, title: tip(e),
+          style: { '--ink': e.ink, '--bgc': e.bg, top: top + 'px', height: px + 'px', left: `calc(${g.lp}% + ${g.lx + 2}px)`, width: `calc(${g.wp}% - ${-g.wx + (it.count > 1 ? 3 : 4)}px)`, zIndex: 2 + it.depth } },
+          h('b', {}, (e.icon && e.icon.length <= 2 ? e.icon + ' ' : '') + e.title), px >= 30 ? h('small', {}, `${ampm(e.s)} – ${ampm(e.e)}`) : null,
+          e.isMd && e.movable ? h('div', { class: 'rz rzt' }) : null, (e.isPage || (e.isMd && e.movable)) ? h('div', { class: 'rz' }) : null);
         if (e.cont) { el.classList.add('cont'); el.querySelector('.rzt') && el.querySelector('.rzt').remove(); el.addEventListener('click', () => select(e.id)); contResize(el, e, d0); }
         else attachDrag(el, e);
         col.append(el);
@@ -199,6 +207,37 @@
     requestAnimationFrame(() => { sc.scrollTop = S._scroll != null ? S._scroll : 7.5 * HOUR; });
     sc.addEventListener('scroll', () => { S._scroll = sc.scrollTop; });
   }
+  // Notion-Calendar-style layout for one day: a block that starts 30+ min inside a longer one sits on top of it, a little indented;
+  // blocks that touch on screen share the width in lanes, so nothing hides. Short blocks never cover the next block's start.
+  function nest(timed, d0, d1) {
+    const mm = (d) => (d - d0) / 6e4;
+    const items = timed.map(e => { const a = e.cont ? 0 : mm(e.s), rb = Math.min(mm(e.e > d1 ? d1 : e.e), 1440); return { e, a, rb, b: Math.max(rb, a + 20) }; })
+      .sort((x, y) => x.a - y.a || (y.rb - y.a) - (x.rb - x.a));
+    items.forEach(it => { const nx = items.filter(o => o !== it && it.rb <= o.a && o.a < it.b).map(o => o.a); if (nx.length) { it.b = Math.max(it.rb, Math.min(...nx)); it.short = true; } });
+    items.forEach((it, i) => { let par = null; for (const p of items.slice(0, i)) if (p.a <= it.a - 30 && p.rb > it.a && (!par || p.depth > par.depth || (p.depth === par.depth && p.a > par.a))) par = p;
+      it.par = par; it.depth = par ? par.depth + 1 : 0; });
+    const groups = new Map(); items.forEach(it => { const k = it.par; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(it); });
+    for (const sib of groups.values()) {
+      let cl = [], ends = [], end = -1;
+      const close = () => cl.forEach(m => { m.count = ends.length; });
+      for (const it of sib) {
+        if (cl.length && it.a >= end) { close(); cl = []; ends = []; }
+        let lane = ends.findIndex(x => x <= it.a); if (lane < 0) { lane = ends.length; ends.push(it.b); } else ends[lane] = it.b;
+        it.lane = lane; cl.push(it); end = Math.max(end, it.b);
+      }
+      close();
+    }
+    return items.sort((x, y) => x.depth - y.depth || x.a - y.a);
+  }
+  function place(it) {                                                        // left / width as (percent, pixels) — inside the parent, indented, then its lane
+    if (it.g) return it.g;
+    let lp = 0, lx = 0, wp = 100, wx = 0;
+    if (it.par) { const p = place(it.par); lp = p.lp; lx = p.lx + 14; wp = p.wp; wx = p.wx - 14; }
+    const n = it.count || 1; it.g = { lp: lp + it.lane * wp / n, lx: lx + it.lane * wx / n, wp: wp / n, wx: wx / n }; return it.g;
+  }
+  const tip = (e) => [e.title, e.allDay ? e.s.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }) : `${ampm(e.s)} – ${ampm(e.e)}`,
+    e.calendar || (S.data && S.data.labels[e.source]) || '', e.detail && !e.isPage ? e.detail : ''].filter(Boolean).join('\n');
+
   function renderMonth(G) {
     const [a] = range(); const today = new Date(), mon = S.anchor.getMonth();
     G.append(h('div', { class: 'mhead' }, DOW.map(d => h('div', {}, d))));
@@ -216,6 +255,7 @@
 
   // ── dragging: move / resize / create ──
   function attachDrag(el, e) {
+    if (e.isMd) el.addEventListener('contextmenu', (ev) => trackerMenu(ev, e));
     el.addEventListener('click', (ev) => { if (el._dragged) { el._dragged = false; return; } ev.stopPropagation(); select(e.id); });
     el.addEventListener('pointerdown', (ev) => {
       if (ev.button !== 0 || !e.movable) return;
@@ -296,8 +336,8 @@
       put(R, h('div', { class: 'dt-label' }, t.toLocaleDateString('en-GB', { weekday: 'long' })), h('div', { class: 'dt-title' }, t.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })),
         list.length ? list.map(x => h('div', { class: 'chip', style: { '--ink': x.ink, '--bgc': x.bg, marginBottom: '4px' }, onclick: () => select(x.id) }, h('span', {}, x.title + (x.detail && !x.isPage ? '  ' + x.detail : '')))) : h('div', { class: 'short' }, 'Nothing on the calendar today.'),
         h('div', { class: 'dt-label', style: { marginTop: '22px' } }, 'SHORTCUTS'),
-        h('div', { class: 'short' }, 'D or 1 · day   W or 0 · week   M · month', h('br'), '2 – 9 · number of days   T · today', h('br'), 'J / K or → / ← · next / previous', h('br'), 'N · new event   Ctrl+Z · undo a move', h('br'), '[ ] · side panels   Esc · close details'),
-        h('div', { class: 'short', style: { marginTop: '12px' } }, 'Drag on empty time to make an event. Drag any event — Pages, income, expense or transfer — to another day to move it; drag a Pages event’s bottom edge to change the end time.'));
+        h('div', { class: 'short' }, 'D or 1 · day   W or 0 · week   M · month', h('br'), '2 – 9 · number of days   T · today', h('br'), 'J / K or → / ← · next / previous', h('br'), 'N · new event   Ctrl+Z · undo a move', h('br'), '[ ] · side panels   Esc · close details', h('br'), 'Delete · delete the selected Tracker task'),
+        h('div', { class: 'short', style: { marginTop: '12px' } }, 'Drag on empty time to make an event. Drag any event to another day or time to move it; pull an edge to change the time. Click a Tracker item to tick it done, change its board or delete it — right-click for a quick menu. Things that are over show lighter. Hover a block to see its full name.'));
       return;
     }
     const when = e.allDay ? (sameDay(e.s, e.e) ? e.s.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'long', year: 'numeric' }) : `${e.s.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} → ${e.e.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}`)
@@ -313,6 +353,8 @@
         h('button', { class: 'dt-btn danger', onclick: async () => { await cal('clear_date', { record_id: e.record_id, prop_id: e.prop_id }).catch(x => toast(x.message)); S.sel = null; load(); } }, 'Remove from calendar (clear the date)'));
       const rows = await cal('details', { db: e.db_id, record_id: e.record_id, prop_id: e.prop_id }).catch(() => []);
       if (S.sel === e.id) put(props, ...rows.filter(r => r[1]).map(([k, v]) => h('div', { class: 'dt-row' }, h('span', { class: 'k' }, k), h('span', {}, v))));
+    } else if (e.isMd) {
+      return trackerDetails(R, e, when);
     } else {
       put(R, ...head, h('div', { class: 'dt-title' }, e.title), h('div', { class: 'big', style: { color: e.ink } }, e.detail || ''), h('div', { class: 'dt-row' }, h('span', { class: 'k' }, 'Date'), h('span', {}, when)),
         h('div', { id: 'findet' }), h('button', { class: 'dt-btn', onclick: () => goTop('finance') }, '↗  Open Finance'));
@@ -323,6 +365,46 @@
         put(box, ...rows.filter(r => r[1]).map(([k, v]) => h('div', { class: 'dt-row' }, h('span', { class: 'k' }, k), h('span', {}, v))));
       }
     }
+  }
+  // ── Tracker items: their properties, tick done, change the board, delete ──
+  const trk = (op, a) => api('/api/tracker', op, a);
+  const row = (k, v) => h('div', { class: 'dt-row' }, h('span', { class: 'k' }, k), typeof v === 'string' ? h('span', {}, v) : v);
+  async function trackerDetails(R, e, when) {
+    const head = h('div', { class: 'dt-label' }, h('span', { style: { display: 'inline-block', width: '9px', height: '9px', borderRadius: '3px', background: e.ink, marginRight: '6px' } }), e.calendar || 'Tracker');
+    if (e.mkind === 'task') {
+      put(R, head, h('div', { class: 'short' }, '…'));
+      const t = await trk('task_info', { id: e.mid }).catch(x => { toast(x.message); return null; }); if (!t || S.sel !== e.id) return;
+      const board = h('select', { class: 'dt-sel', onchange: async () => { await trk('task_save', { task: { id: t.id, area_id: +board.value } }).catch(x => toast(x.message)); load(); } },
+        t.areas.map(a => h('option', { value: a.id, selected: a.id === t.area_id ? true : null }, a.name)));
+      put(R, head, h('label', { class: 'dt-done' }, h('input', { type: 'checkbox', checked: t.done, onchange: (k) => doneTask(t.id, k.target.checked) }), h('span', { class: t.done ? 'x' : '' }, t.title)),
+        row('Status', t.done ? `Done ✓  ${ampm(parse(t.done_at))}` + (t.done_at.slice(0, 10) !== t.day ? ' · ' + parse(t.done_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : '') : ({ todo: 'To do', doing: 'Doing', idea: 'Idea', missed: 'Missed' }[t.status] || 'To do')),
+        row('Board', board), row('When', when), t.repeat ? row('Repeats', t.repeat) : null, t.note ? row('Note', t.note) : null,
+        h('button', { class: 'dt-btn', onclick: () => goTop('tracker') }, '↗  Open in Tracker (change it there)'),
+        h('button', { class: 'dt-btn danger', onclick: () => delTask(e) }, t.repeat ? 'Delete this day (the repeat goes on)' : 'Delete task'));
+    } else if (e.mkind === 'habit') {
+      const [hid, day] = String(e.mid).split('|'); const done = e.title.startsWith('✓');
+      put(R, head, h('label', { class: 'dt-done' }, h('input', { type: 'checkbox', checked: done, onchange: async (k) => { await trk('habit_log', { id: +hid, day, state: k.target.checked ? 'done' : null }).catch(x => toast(x.message)); load(); } }),
+        h('span', { class: done ? 'x' : '' }, e.title.replace(/^✓ /, ''))), row('When', when), row('Day', parse(day).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'short' })),
+        h('div', { class: 'short', style: { marginTop: '10px' } }, 'Check-ins and habits are planned in the Tracker — change the time or the days there.'),
+        h('button', { class: 'dt-btn', onclick: () => goTop('tracker') }, '↗  Open in Tracker'));
+    } else {
+      put(R, head, h('div', { class: 'dt-title' }, e.title), row('When', when), e.detail ? row('Note', e.detail) : null,
+        h('div', { class: 'short', style: { marginTop: '10px' } }, e.mkind === 'sleepplan' ? 'Your usual times. Drag it to change this night — then it is saved as a real night.' : 'Drag it, or pull its top or bottom edge, to change the time.'),
+        h('button', { class: 'dt-btn', onclick: () => goTop('tracker') }, '↗  Open in Tracker'));
+    }
+  }
+  async function doneTask(id, on) { try { await trk('task_done', { id, on }); toast(on ? 'Done ✓' : 'Opened again'); } catch (x) { toast(x.message); } load(); }
+  async function delTask(e) {
+    const rep = /repeat|every|week|day/i.test(e.detail || '');
+    if (!confirm(rep ? `Delete “${e.title}” on this day? It repeats — only this day goes, the repeat goes on.` : `Delete “${e.title}”? This cannot be undone.`)) return;
+    try { await trk('task_delete', { id: e.mid }); toast('Deleted'); S.sel = null; } catch (x) { toast(x.message); } load();
+  }
+  function trackerMenu(ev, e) {
+    ev.preventDefault(); select(e.id);
+    const at = { getBoundingClientRect: () => ({ left: ev.clientX, bottom: ev.clientY }) };
+    const done = e.title.startsWith('✓');
+    if (e.mkind === 'task') menu(at, [[done ? 'Mark not done' : 'Mark done ✓', '', () => doneTask(e.mid, !done)], ['Open in Tracker', '', () => goTop('tracker')], '-', ['Delete…', 'Del', () => delTask(e)]]);
+    else if (e.mkind === 'habit') { const [hid, day] = String(e.mid).split('|'); menu(at, [[done ? 'Mark not done' : 'Mark done ✓', '', async () => { await trk('habit_log', { id: +hid, day, state: done ? null : 'done' }).catch(x => toast(x.message)); load(); }], ['Open in Tracker', '', () => goTop('tracker')]]); }
   }
   const goTop = (to, doc) => { try { window.top.postMessage({ curio: 'go', to, doc }, location.origin); } catch (e) { /* standalone */ } };
   const goPages = (doc) => goTop('pages', doc);
@@ -415,6 +497,7 @@
     else if (K === 'j' || K === 'arrowright') shift(1); else if (K === 'k' || K === 'arrowleft') shift(-1);
     else if (K === 'n') newEvent(roundNow(), null, false); else if (K === '[') togglePanel('left'); else if (K === ']') togglePanel('right');
     else if (K === 'escape') { S.sel = null; $$('.sel').forEach(x => x.classList.remove('sel')); renderRight(); }
+    else if (K === 'delete' || K === 'backspace') { const e = EV.find(x => x.id === S.sel); if (e && e.isMd && e.mkind === 'task') { k.preventDefault(); delTask(e); } }
   });
   setInterval(() => { const n = $('.now'); if (n) { const t = new Date(); n.style.top = (t.getHours() * 60 + t.getMinutes()) / 60 * HOUR + 'px'; } }, 60000);
   window.addEventListener('focus', () => load());                 // changes made in Pages / Finance show up when you come back
