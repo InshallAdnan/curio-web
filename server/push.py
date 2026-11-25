@@ -125,3 +125,18 @@ def inbox():
     if rows: _db([('UPDATE push_inbox SET seen=1 WHERE id IN (%s)' % ','.join(str(int(r['id'])) for r in rows), ())])
     _db([('DELETE FROM push_inbox WHERE ts<?', (time.time() - 7 * 86400,))])
     return rows
+
+
+def seen_tick():
+    """10.43: remember when the reminder service last called (so Setup can say if it is working)"""
+    try: _db([('INSERT OR REPLACE INTO push_store(k, v) VALUES(?,?)', ('last_tick', str(time.time())))])
+    except Exception: pass
+
+
+def status():
+    try: v = _db([('SELECT v FROM push_store WHERE k=?', ('last_tick',))])[0].rows
+    except Exception: v = []
+    last = float(v[0][0]) if v else None
+    ss = subs()
+    kinds = sorted({('Android / Chrome' if 'fcm.googleapis' in x['endpoint'] else 'iPhone' if 'push.apple' in x['endpoint'] else 'Other') for x in ss})
+    return dict(last_tick=last, ago=(time.time() - last) if last else None, phones=len(ss), kinds=kinds)

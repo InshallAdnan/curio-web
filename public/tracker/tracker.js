@@ -1,4 +1,4 @@
-/* Curio Tracker on the web — the same book as the desktop's Tracker: Home, Tasks, Check-ins, Habits, Sleep, NoFap, Nudges, Inspo,
+/* Curio Tracker on the web — the same book as the desktop's Tracker (10.43): Home, Notes, Tasks, Check-ins, Habits, Nudges, Inspo, Sleep, Quit,
    and phone reminders. Everything is one call: POST /api/tracker {op, args}. */
 (function () {
   'use strict';
@@ -42,7 +42,8 @@
   const inp = (v, ph, type = 'text') => h('input', { class: 'inp', type, value: v ?? '', placeholder: ph || '' });
 
   // ── tabs ──
-  const TABS = [['home', 'Home'], ['tasks', 'Tasks'], ['checkins', 'Check-ins'], ['habits', 'Habits'], ['sleep', 'Sleep'], ['quit', 'NoFap'], ['nudges', 'Nudges'], ['inspo', 'Inspo'], ['phone', 'Setup']];
+  // like the desktop 10.42+: Notes and Tasks right after Home; Quit is for anything (smoking, NoFap…)
+  const TABS = [['home', 'Home'], ['notes', 'Notes'], ['tasks', 'Tasks'], ['checkins', 'Check-ins'], ['habits', 'Habits'], ['nudges', 'Nudges'], ['inspo', 'Inspo'], ['sleep', 'Sleep'], ['quit', 'Quit'], ['phone', 'Setup']];
   let cur = (location.hash.slice(1) || 'home');
   function nav() { $('#nav').replaceChildren(...TABS.map(([k, t]) => h('button', { class: 'tab' + (k === cur ? ' on' : ''), onclick: () => { $('#sheet').classList.remove('on'); $('#scrim').classList.remove('on'); cur = k; location.hash = k; nav(); draw(); } }, t))); }
   let tick = null;
@@ -68,7 +69,7 @@
     const mini = h('div', { class: 'grid2' });
     if (d.sleep) mini.append(h('div', { class: 'card', onclick: () => { cur = 'sleep'; location.hash = 'sleep'; nav(); draw(); } }, h('h3', {}, 'Sleep', h('span', { class: 'sp' }), h('span', { class: 'pill', style: { '--c': d.sleep.color } }, d.sleep.grade)),
       h('div', { class: 'big', style: { color: d.sleep.color } }, hm(d.sleep.minutes)), h('div', { class: 'muted' }, `${t12(d.sleep.bed.slice(11, 16))} → ${t12(d.sleep.wake.slice(11, 16))}`)));
-    for (const q of d.quit) mini.append(h('div', { class: 'card' }, h('h3', {}, q.name), h('div', { class: 'row' }, h('div', { class: 'big' }, q.days), h('div', { class: 'muted' }, 'days clean', h('br'), `best ${q.best}`)),
+    for (const q of d.quit) mini.append(h('div', { class: 'card' }, h('h3', {}, q.name), h('div', { class: 'row' }, h('div', { class: 'big' }, q.days), h('div', { class: 'muted' }, 'days without it', h('br'), `best ${q.best}`)),
       h('div', { class: 'row', style: { marginTop: '8px' } }, h('button', { class: 'btn sm primary', onclick: () => struggle(q.id) }, 'I’m struggling'), h('button', { class: 'btn sm', onclick: () => slipped(q.id, q.name) }, 'I slipped'))));
     els.push(mini, h('div', { style: { height: '12px' } }));
     // the day in order
@@ -97,14 +98,6 @@
           chk(x.done, c, (on) => act('habit_log', { id: x.id, state: on ? 'done' : null })), h('div', { class: 't' }, h('b', {}, x.name)), h('span', { class: 'faint' }, rng(x))))));
     }
     els.push(tiles);
-    // this week
-    const wk = h('div', { class: 'week' }); const today = iso(new Date());
-    for (const [day, list] of Object.entries(d.week)) {
-      const dd = new Date(day + 'T00:00');
-      wk.append(h('div', { class: 'day' + (day === today ? ' today' : '') }, h('div', { class: 'd' }, dd.toLocaleDateString('en-GB', { weekday: 'short' }) + ' ' + dd.getDate()),
-        ...list.map(x => h('div', { class: 'chip' + (x.done ? ' x' : ''), style: { '--c': x.color || '#888' }, title: x.title }, x.title))));
-    }
-    els.push(h('div', { class: 'card' }, h('h3', {}, 'This week'), wk));
     els.push(await aiCard(iso(new Date())));
     p.replaceChildren(...els);
   };
@@ -150,98 +143,125 @@
     return box;
   }
 
-  // ── Tasks ──
+  // ── Tasks (like the desktop 10.40+: big boards, one date navigator, Day / Week, List / Table; done tasks stay) ──
   let AREAS = [];
+  const TK = { area: null, day: iso(new Date()), span: 'day', view: 'list' };
+  const addDays = (s, k) => { const d = new Date(s + 'T00:00'); d.setDate(d.getDate() + k); return iso(d); };
+  const monOf = (s) => { const d = new Date(s + 'T00:00'); const k = (d.getDay() + 6) % 7; d.setDate(d.getDate() - k); return iso(d); };
+  // one navigator for every page: ‹ [pick a day] ›  and Today (orange when you are on another day)
+  function dateNav(cur, onPick, opts = {}) {
+    const today = iso(new Date()); const max = opts.max || null;
+    const pick = h('input', { type: 'date', class: 'inp dpick', value: cur, max: max || undefined, onchange: (e) => e.target.value && onPick(e.target.value) });
+    const step = (k) => { let v = addDays(cur, k * (opts.step || 1)); if (max && v > max) v = max; onPick(v); };
+    const lab = opts.label || ((cur === today ? 'Today · ' : '') + new Date(cur + 'T00:00').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }));
+    return h('div', { class: 'dnav' }, h('button', { class: 'btn sm', onclick: () => step(-1) }, '‹'),
+      h('label', { class: 'dlab' }, h('b', {}, lab), ' ▾', pick), h('button', { class: 'btn sm', disabled: !!(max && cur >= max), onclick: () => step(1) }, '›'),
+      h('button', { class: 'btn sm' + ((opts.isNow ? !opts.isNow() : cur !== today) ? ' primary' : ' soft'), onclick: () => onPick(today) }, 'Today'));
+  }
+  const seg = (opts, cur, fn) => h('div', { class: 'seg' }, opts.map(([k, t]) => h('button', { class: cur === k ? 'on' : '', onclick: () => fn(k) }, t)));
+  const status = (x) => x.done ? ['Done', 'var(--good)'] : x.late ? ['Not done', 'var(--bad)'] : ['To do', 'var(--muted)'];
+  const whenTxt = (x, withDay) => [withDay && x.day ? dayLab(x.day) : '', x.time ? t12(x.time) + ' → ' + t12(endOf(x)) : ''].filter(Boolean).join(' · ');
   V.tasks = async (p) => {
-    const d = await api('tasks'); AREAS = d.areas;
-    const row = (x, showDay) => h('div', { class: 'item' + (x.done ? ' done' : ''), onclick: () => taskForm(x) }, chk(x.done, x.color, (on) => act('task_done', { id: x.id, on }, on ? 'Done' : 'Opened again')),
-      h('div', { class: 't' }, h('b', {}, x.title), h('small', {}, [x.area, showDay && x.day ? dayLab(x.day) : '', x.time ? t12(x.time) + ' – ' + t12(endOf(x)) : ''].filter(Boolean).join('  ·  '))));
-    const els = [h('div', { class: 'row', style: { marginBottom: '10px' } }, h('div', { class: 'grow' }), h('button', { class: 'btn', onclick: boardsForm }, 'Boards'), h('button', { class: 'btn primary', onclick: () => taskForm({ day: iso(new Date()) }) }, '+ Task'))];
-    for (const [k, t] of [['overdue', 'Overdue'], ['today', 'Today'], ['upcoming', 'Upcoming'], ['someday', 'No date']]) {
-      if (!d[k].length && k !== 'today') continue;
-      els.push(h('div', { class: 'card' }, h('h3', {}, t, h('span', { class: 'muted' }, d[k].length || '')), ...(d[k].length ? d[k].map(x => row(x, k !== 'today')) : [h('div', { class: 'empty' }, 'Nothing for today.')])));
+    const start = TK.span === 'week' ? monOf(TK.day) : TK.day, end = TK.span === 'week' ? addDays(start, 6) : TK.day;
+    const d = await api('tasks_days', { start, end, area: TK.area }); AREAS = d.boards;
+    // the boards
+    const bar = h('div', { class: 'boards' }, h('button', { class: 'board' + (TK.area == null ? ' on' : ''), style: { '--c': 'var(--ink)' }, onclick: () => { TK.area = null; draw(); } }, 'All boards', h('span', {}, d.all_open)),
+      ...d.boards.map(b => h('button', { class: 'board' + (TK.area === b.id ? ' on' : ''), style: { '--c': b.color }, title: 'Tap again for Rename / Colour / Delete',
+        onclick: () => { if (TK.area === b.id) boardMenu(b, d.boards); else { TK.area = b.id; draw(); } },
+        oncontextmenu: (e) => { e.preventDefault(); boardMenu(b, d.boards); } }, h('i', {}), b.name, h('span', {}, b.open))),
+      h('button', { class: 'board add', onclick: () => newBoard() }, '+ Board'));
+    const wlab = TK.span === 'week' ? `${new Date(start + 'T00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} – ${new Date(end + 'T00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}` : null;
+    const top = h('div', { class: 'row wrapr', style: { margin: '10px 0' } }, dateNav(TK.day, (v) => { TK.day = v; draw(); }, { step: TK.span === 'week' ? 7 : 1, label: wlab,
+      isNow: () => TK.span === 'week' ? monOf(iso(new Date())) === start : TK.day === iso(new Date()) }),
+      seg([['day', 'Day'], ['week', 'Week']], TK.span, (k) => { TK.span = k; draw(); }), h('div', { class: 'grow' }),
+      seg([['list', 'List'], ['table', 'Table']], TK.view, (k) => { TK.view = k; draw(); }),
+      h('button', { class: 'btn primary', onclick: () => taskForm({ day: TK.day, area_id: TK.area }) }, '+ Task'));
+    const els = [bar, top];
+    const row = (x, withDay) => h('div', { class: 'item' + (x.done ? ' done' : '') + (x.late ? ' lateit' : ''), onclick: () => taskForm(x) },
+      chk(x.done, x.color, (on) => act('task_done', { id: x.id, on }, on ? 'Done ✓' : 'Opened again')),
+      h('div', { class: 't' }, h('b', {}, x.title), h('small', {}, [x.area, whenTxt(x, withDay)].filter(Boolean).join('  ·  '))));
+    if (TK.view === 'table') {
+      const rows = d.rows;
+      els.push(h('div', { class: 'card tblc' }, h('table', { class: 'tbl' }, h('thead', {}, h('tr', {}, h('th', {}, 'Status'), h('th', {}, 'Task'), h('th', {}, 'Board'), h('th', {}, 'Date'))),
+        h('tbody', {}, ...rows.map(x => { const [st, sc] = status(x); return h('tr', { class: (x.done ? 'done' : '') + (x.late ? ' lateit' : ''), onclick: () => taskForm(x) },
+          h('td', {}, h('div', { class: 'row', style: { gap: '8px' } }, chk(x.done, x.color, (on) => act('task_done', { id: x.id, on }, on ? 'Done ✓' : 'Opened again')), h('b', { style: { color: sc, fontSize: '12px' } }, st))),
+          h('td', { class: 'tt' }, x.title), h('td', { style: { color: x.color } }, x.area || ''), h('td', { class: 'muted' }, whenTxt(x, true) || dayLab(x.day))); }))),
+        rows.length ? null : h('div', { class: 'empty' }, 'Nothing planned in these days.'),
+        h('div', { class: 'faint', style: { marginTop: '8px' } }, 'Tap a row to change it · red “Not done” = its time is over and it is not ticked.')));
+    } else {
+      const days = TK.span === 'week' ? [...Array(7)].map((_, i) => addDays(start, i)) : [TK.day];
+      for (const day of days) {
+        const list = d.rows.filter(x => x.day === day);
+        if (TK.span === 'week' && !list.length) continue;
+        els.push(h('div', { class: 'card' }, h('h3', {}, dayLab(day), h('span', { class: 'muted', style: { fontWeight: 600, fontSize: '13px' } }, `${list.filter(x => x.done).length}/${list.length}`), h('span', { class: 'sp' }),
+          h('button', { class: 'btn sm', onclick: () => taskForm({ day, area_id: TK.area }) }, '+')), ...(list.length ? list.map(x => row(x, false)) : [h('div', { class: 'empty' }, 'Nothing planned.')])));
+      }
+      if (TK.span === 'week' && !d.rows.length) els.push(h('div', { class: 'card empty' }, 'Nothing planned this week.'));
+      if (d.nodate.length) els.push(h('div', { class: 'card' }, h('h3', {}, 'No date', h('span', { class: 'muted' }, d.nodate.length)), ...d.nodate.map(x => row(x, false))));
     }
-    if (false && d.repeating.length) els.push(h('div', { class: 'card' }, h('h3', {}, 'Repeating'), ...d.repeating.map(x => h('div', { class: 'item' }, h('div', { class: 't' }, h('b', {}, x.title), h('small', {}, `${x.rule} · done ${x.done}×` + (x.next ? ' · next ' + dayLab(x.next) : ''))),
-      h('span', { class: 'pill', style: { '--c': x.state === 'running' ? 'var(--good)' : x.state === 'ending' ? 'var(--poor)' : 'var(--bad)' } }, x.state),
-      x.state === 'running' || x.state === 'ending' ? h('button', { class: 'btn sm', onclick: () => confirm(`Stop “${x.title}”? Its history stays.`) && act('stop_series', { id: x.id }, 'Stopped') }, 'Stop')
-        : h('button', { class: 'btn sm', onclick: () => act('restart_series', { id: x.id }, 'Restarted') }, 'Restart')))));
-    if (d.done.length) els.push(h('div', { class: 'card' }, h('h3', {}, 'Done lately'), ...d.done.slice(0, 10).map(x => row(x, true))));
     p.replaceChildren(...els);
   };
-  // boards: add, rename, delete (its tasks / check-ins move to the board you pick — nothing is deleted)
-  async function boardsForm() {
-    const list = h('div', {});
-    const fill = async () => {
-      const bs = await api('areas');
-      list.replaceChildren(...bs.map(b => h('div', { class: 'item' }, h('span', { class: 'dotc', style: { '--c': b.color } }),
-        h('div', { class: 't' }, h('b', {}, b.name), h('small', {}, `${b.tasks} task${b.tasks === 1 ? '' : 's'} · ${b.habits} check-in / habit${b.habits === 1 ? '' : 's'}`)),
-        h('button', { class: 'btn sm soft', onclick: async () => { const n = prompt('New name for the board:', b.name); if (n && n.trim()) { await api('area_save', { id: b.id, name: n }).catch(e => toast(e.message)); AREAS = []; fill(); draw(); } } }, 'Rename'),
-        h('button', { class: 'btn sm danger', onclick: () => delBoard(b, bs, fill) }, 'Delete'))),
-        h('div', { class: 'row', style: { marginTop: '10px' } }, (() => { const nb = inp('', 'New board name'); const add = h('button', { class: 'btn sm primary', onclick: async () => { if (!nb.value.trim()) return; await api('area_save', { name: nb.value }).catch(e => toast(e.message)); AREAS = []; fill(); draw(); } }, '+ Add');
-          return [nb, add]; })()));
-    };
-    await fill(); sheet('Boards', list, []);
+  // board: rename, colour, delete (its tasks / check-ins move to the board you pick — nothing is deleted)
+  const BCOL = ['#e0a100', '#f2602d', '#dc2626', '#d6457a', '#8b5cf6', '#6d5bd0', '#2f6fde', '#0e8fa3', '#1f9d6b', '#65a30d', '#a16207', '#6b7280'];
+  function boardMenu(b, all) {
+    const name = inp(b.name, 'Board name'); let col = b.color;
+    const sw = h('div', { class: 'swatches' }, ...BCOL.map(c => h('button', { class: c === col ? 'on' : '', style: { background: c }, onclick: (e) => { col = c; wheel.value = c; sw.querySelectorAll('button').forEach(z => z.classList.toggle('on', z === e.currentTarget)); } })));
+    const wheel = h('input', { type: 'color', value: col, class: 'wheel', oninput: (e) => { col = e.target.value; sw.querySelectorAll('button').forEach(z => z.classList.remove('on')); } });
+    sheet(b.name, h('div', {}, field('Name', name), field('Colour (the Calendar uses it too)', h('div', { class: 'row', style: { flexWrap: 'wrap' } }, sw, h('label', { class: 'faint row' }, wheel, 'any colour')))),
+      [['Delete board…', 'danger', () => { delBoard(b, all); return false; }],
+       ['Save', 'primary', async () => { try { await api('area_save', { id: b.id, name: name.value, color: col }); toast('Saved'); draw(); } catch (e) { toast(e.message); return false; } }]]);
   }
-  function delBoard(b, bs, after) {
-    const others = bs.filter(x => x.id !== b.id); const n = b.tasks + b.habits;
+  function newBoard() {
+    const name = inp('', 'e.g. Health, Office, Family');
+    sheet('New board', field('Name', name), [['Add', 'primary', async () => { try { await api('area_save', { name: name.value, color: BCOL[(AREAS.length + 2) % BCOL.length] }); draw(); } catch (e) { toast(e.message); return false; } }]]);
+    setTimeout(() => name.focus(), 250);
+  }
+  function delBoard(b, bs) {
+    const others = bs.filter(x => x.id !== b.id);
     const to = h('select', { class: 'inp' }, others.map(x => h('option', { value: x.id }, x.name)), h('option', { value: '' }, 'No board'));
-    sheet(`Delete “${b.name}”?`, h('div', {}, n ? h('p', { class: 'muted' }, `It has ${b.tasks} task(s) (done ones too) and ${b.habits} check-in / habit(s). They are not deleted — they move to:`) : h('p', { class: 'muted' }, 'It is empty — nothing else changes.'),
-      n ? to : null), [['Delete board', 'danger', async () => { await api('area_delete', { id: b.id, move_to: n ? to.value || null : null }).catch(e => toast(e.message)); toast('Board deleted'); AREAS = []; draw(); }]]);
-    void after;
+    sheet(`Delete “${b.name}”?`, h('div', {}, h('p', { class: 'muted' }, 'Its tasks and check-ins are not deleted — they move to:'), to),
+      [['Delete board', 'danger', async () => { await api('area_delete', { id: b.id, move_to: to.value || null }).catch(e => toast(e.message)); toast('Board deleted'); if (TK.area === b.id) TK.area = null; draw(); }]]);
   }
-  const rng = (x) => x.time ? t12(x.time) + (x.etime ? ' – ' + t12(x.etime) : '') : '';
+  const rng = (x) => x.time ? t12(x.time) + (x.etime ? ' → ' + t12(x.etime) : '') : '';
   const endOf = (x) => { if (!x.time) return ''; const [a, b] = x.time.split(':').map(Number); const e = a * 60 + b + (x.minutes || 30); return `${pad(Math.floor(e / 60) % 24)}:${pad(e % 60)}`; };
-  async function repForm() {
-    if (!AREAS.length) AREAS = (await api('tasks')).areas;
-    const title = inp('', 'e.g. Hair oiling'); let area = (AREAS[0] || {}).id; let days = [new Date().getDay() === 0 ? 6 : new Date().getDay() - 1];
-    const chips = h('div', { class: 'chips' }, AREAS.map(a => { const b = h('button', { class: a.id === area ? 'on' : '', style: { '--c': a.color }, onclick: () => { area = a.id; chips.querySelectorAll('button').forEach(z => z.classList.toggle('on', z === b)); } }, a.name); return b; }));
-    const every = h('select', { class: 'inp' }, [['day', 'Every day'], ['weekdays', 'Weekdays'], ['week', 'Every week on…'], ['month', 'Every month']].map(([k, t]) => h('option', { value: k }, t)));
-    const dchips = h('div', { class: 'chips' }, DOW.map((t, i) => { const b = h('button', { class: days.includes(i) ? 'on' : '', onclick: () => { days = days.includes(i) ? days.filter(z => z !== i) : [...days, i]; b.classList.toggle('on'); } }, t); return b; }));
-    const st = inp('', '', 'time'), en = inp('', '', 'time'), start = inp(iso(new Date()), '', 'date'), end = inp('', '', 'date');
-    sheet('New repeating task', h('div', {}, field('Task', title), field('Board', chips), field('Repeat', every), field('On (for “every week”)', dchips), field('Starts', start),
-      h('div', { class: 'grid2' }, field('From', st), field('To', en)), field('Ends (empty = keeps repeating)', end)),
-      [['Save', 'primary', async () => {
-        const k = every.value; const rep = k === 'day' ? { every: 'day', n: 1 } : k === 'weekdays' ? { every: 'week', n: 1, days: [0, 1, 2, 3, 4] } : k === 'week' ? { every: 'week', n: 1, days: days.sort() } : { every: 'month', n: 1 };
-        let m = 30; if (st.value && en.value) { const [a, b] = st.value.split(':').map(Number), [c, e] = en.value.split(':').map(Number); m = (c * 60 + e) - (a * 60 + b); if (m <= 0) m += 1440; }
-        try { await api('task_save', { task: { title: title.value, area_id: area, day: start.value, time: st.value || null, minutes: m, repeat: rep, repeat_end: end.value || null, remind: st.value ? 10 : -1 } }); toast('Saved'); draw(); }
-        catch (e) { toast(e.message); return false; }
-      }]]);
-  }
   async function taskForm(x) {
-    if (!AREAS.length) AREAS = (await api('tasks')).areas;
-    const title = inp(x.title, 'What needs doing?'); let area = x.area_id || (AREAS[0] || {}).id;
+    if (!AREAS.length) AREAS = (await api('tasks_days', { start: iso(new Date()) })).boards;
+    const title = inp(x.title, 'What needs doing?'); const why = inp(x.why, 'Optional — one line: why it matters'); let area = x.area_id || (AREAS[0] || {}).id;
     const chips = h('div', { class: 'chips' }, AREAS.map(a => { const b = h('button', { class: a.id === area ? 'on' : '', style: { '--c': a.color }, onclick: () => { area = a.id; chips.querySelectorAll('button').forEach(z => z.classList.toggle('on', z === b)); } }, a.name); return b; }));
     const day = inp(x.day || '', '', 'date'), st = inp(x.time || '', '', 'time'), en = inp(x.time ? endOf(x) : '', '', 'time');
     const note = h('textarea', { class: 'inp', rows: 3, placeholder: 'Notes (optional)' }, x.note || '');
-    const body = h('div', {}, field('Task', title), field('Board', chips), h('div', { class: 'grid2' }, field('Day', day), h('div', {})),
-      h('div', { class: 'grid2' }, field('Starts', st), field('Ends', en)), h('div', { class: 'faint' }, 'Leave the times empty for an all-day task. The length is worked out from start → end.'), field('Notes', note));
+    const body = h('div', {}, field('Task', title), field('Why', why), field('Board', chips), field('Day', day),
+      h('div', { class: 'grid2' }, field('Starts', st), field('Ends', en)), h('div', { class: 'faint' }, 'Leave the times empty for an all-day task.'), field('Notes', note));
     const btns = [['Save', 'primary', async () => {
       let m = x.minutes || 30;
       if (st.value && en.value) { const [a, b] = st.value.split(':').map(Number), [c, e] = en.value.split(':').map(Number); m = (c * 60 + e) - (a * 60 + b); if (m <= 0) m += 1440; }
-      try { await api('task_save', { task: { id: x.id, title: title.value, area_id: area, day: day.value || null, time: day.value && st.value ? st.value : null, minutes: m, note: note.value, remind: st.value ? 10 : -1 } }); toast('Saved'); draw(); }
+      try { await api('task_save', { task: { id: x.id, title: title.value, why: why.value, area_id: area, day: day.value || null, time: day.value && st.value ? st.value : null, minutes: m, note: note.value, remind: st.value ? 10 : -1 } }); toast('Saved'); draw(); }
       catch (e) { toast(e.message); return false; }
     }]];
-    if (x.id) btns.unshift(['Delete', 'danger', async () => { if (!confirm(x.repeat ? 'Delete this day? It is a repeating task — only this day goes, the repeat goes on.' : 'Delete this task?')) return false; await act('task_delete', { id: x.id }, 'Deleted'); }]);
-    if (x.id && x.done_at) body.prepend(h('div', { class: 'pill', style: { '--c': 'var(--good)', marginBottom: '6px' } }, 'Done ✓ ' + t12(x.done_at.slice(11, 16)) + (x.done_at.slice(0, 10) !== x.day ? ' · ' + dayLab(x.done_at.slice(0, 10)) : '')));
+    if (x.id) btns.unshift(['Delete', 'danger', async () => { if (!confirm('Delete this task?')) return false; await act('task_delete', { id: x.id }, 'Deleted'); }]);
     sheet(x.id ? 'Edit task' : 'New task', body, btns); setTimeout(() => title.focus(), 250);
   }
 
-  // ── Check-ins and Habits ──
+  // ── Check-ins and Habits (any day: ‹ day ›; green done, red when the time passed) ──
+  const HD = { day: iso(new Date()) };
   async function habitsView(p, routine) {
-    const d = await api('checkins'); const els = [];
+    const d = await api('checkins', { day: HD.day }); const els = [];
+    els.push(h('div', { class: 'row wrapr', style: { marginBottom: '10px' } }, dateNav(HD.day, (v) => { HD.day = v; draw(); }, { max: iso(new Date()) }), h('div', { class: 'grow' }),
+      h('button', { class: 'btn primary', onclick: () => habitForm(routine ? { routine: 'Morning' } : { routine: '' }, d) }, routine ? '+ Check-in item' : '+ Habit')));
     const groups = routine ? [...d.order.filter(k => d.groups[k]), ...Object.keys(d.groups).filter(k => k && !d.order.includes(k))] : [''];
     for (const g of groups) {
-      const items = d.groups[g] || []; const c = d.colors[g] || 'var(--accent)';
-      if (!routine && !items.length) { els.push(h('div', { class: 'card' }, h('div', { class: 'empty' }, 'No habits yet.'), h('button', { class: 'btn primary', onclick: () => habitForm({ routine: '' }, d) }, '+ Habit'))); continue; }
-      els.push(h('div', { class: 'card' }, h('h3', { style: { color: c } }, g || 'Habits', h('span', { class: 'sp' }), h('span', { class: 'muted', style: { fontSize: '13px' } }, `${items.filter(x => x.state === 'done').length}/${items.filter(x => x.due).length} today`),
-          h('button', { class: 'btn sm', onclick: () => habitForm({ routine: g }, d) }, '+')),
-        ...items.map(x => h('div', { class: 'item' + (x.state === 'done' ? ' done' : '') + (x.late ? ' lateit' : ''), onclick: () => habitForm(x, d) }, chk(x.state === 'done', c, (on) => act('habit_log', { id: x.id, state: on ? 'done' : null })),
-          h('div', { class: 't' }, h('b', {}, x.name), h('small', {}, [rng(x), x.late ? 'time passed — not done' : '', x.streak ? `${x.streak} day streak` : ''].filter(Boolean).join('  ·  '))),
-          h('div', { class: 'dots' }, x.week.map(([day, s]) => h('div', { class: 'dot ' + (s === 'today' && x.late ? 'missed' : s), style: { '--c': c }, title: `${dayLab(day)}: ` + ({ done: 'done', missed: 'missed', skip: 'skipped', today: x.late ? 'time passed — not ticked' : 'not ticked yet', off: 'not planned' }[s] || '') })))))));
+      const items = (d.groups[g] || []).filter(x => x.due); const c = d.colors[g] || 'var(--good)';
+      if (!items.length) { if (!routine) els.push(h('div', { class: 'card empty' }, 'No habits on this day.')); continue; }
+      els.push(h('div', { class: 'card' }, h('h3', { style: { color: c } }, g || 'Habits', h('span', { class: 'sp' }), h('span', { class: 'muted', style: { fontSize: '13px' } }, `${items.filter(x => x.state === 'done').length} of ${items.length} done`)),
+        ...items.map(x => { const late = x.late && x.state !== 'done';
+          const pill = x.state === 'done' ? ['done', 'var(--good)'] : x.state === 'skip' ? ['skipped', 'var(--muted)'] : x.state === 'missed' ? ['missed', 'var(--bad)'] : late ? ['not done', 'var(--bad)'] : null;
+          return h('div', { class: 'item' + (x.state === 'done' ? ' done' : '') + (late ? ' lateit' : ''), onclick: () => habitForm(x, d) },
+            chk(x.state === 'done', c, (on) => act('habit_log', { id: x.id, day: HD.day, state: on ? 'done' : null })),
+            h('div', { class: 't' }, h('b', {}, x.name), x.why ? h('small', {}, x.why) : null), pill ? h('span', { class: 'pill', style: { '--c': pill[1] } }, pill[0]) : null,
+            h('span', { class: 'faint', style: { minWidth: '66px', textAlign: 'right' } }, rng(x))); })));
     }
-    if (d.changes.length) els.push(h('div', { class: 'card' }, h('h3', {}, 'Changes'), ...d.changes.map(x => h('div', { class: 'item' }, h('span', { class: 'pill', style: { '--c': x.color } }, x.what),
+    if (d.changes.length) els.push(h('div', { class: 'card' }, h('h3', {}, 'Changes'), h('div', { class: 'faint' }, 'What you added, changed and stopped — and when.'), ...d.changes.slice(0, 8).map(x => h('div', { class: 'item' }, h('span', { class: 'pill', style: { '--c': x.color } }, x.what),
       h('div', { class: 't' }, h('b', {}, x.name), h('small', {}, `${dayLab(x.day)} · ${x.detail}`))))));
-    if (routine) els.unshift(h('div', { class: 'row', style: { marginBottom: '10px' } }, h('div', { class: 'grow muted' }, 'Tap an item to change or stop it.'), h('button', { class: 'btn primary', onclick: () => habitForm({ routine: 'Morning' }, d) }, '+ Item')));
     const st = (d.stopped || []).filter(x => routine ? x.routine : !x.routine);
     if (st.length) els.push(h('div', { class: 'card' }, h('h3', {}, routine ? 'Removed items' : 'Stopped habits'), ...st.map(x => h('div', { class: 'item' }, h('div', { class: 't' }, h('b', {}, x.name), h('small', {}, x.last ? 'stopped ' + dayLab(x.last) : '')),
       h('button', { class: 'btn sm', onclick: () => act('habit_restart', { id: x.id }, 'Back from today') }, 'Restart')))));
@@ -249,9 +269,9 @@
   }
   const DOW = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'];
   async function habitForm(x, d) {
-    if (!AREAS.length) AREAS = (await api('tasks')).areas;
+    if (!AREAS.length) AREAS = (await api('tasks_days', { start: iso(new Date()) })).boards;
     const isRt = x.routine !== '' && x.routine != null;
-    const name = inp(x.name, isRt ? 'e.g. Fajr, Skincare, Check Gmail' : 'e.g. Read 20 pages');
+    const name = inp(x.name, isRt ? 'e.g. Fajr, Skincare, Check Gmail' : 'e.g. Read 20 pages'); const why = inp(x.why, 'Optional — one line: why it matters');
     const rt = h('select', { class: 'inp' }, [...new Set([...(d.order || []), ...(x.routine ? [x.routine] : [])])].map(r => h('option', { value: r, selected: r === x.routine }, r)));
     let days = (x.days && x.days.length ? x.days : [0, 1, 2, 3, 4, 5, 6]).slice();
     const dchips = h('div', { class: 'chips' }, DOW.map((t, i) => { const b = h('button', { class: days.includes(i) ? 'on' : '', onclick: () => { days = days.includes(i) ? days.filter(z => z !== i) : [...days, i]; b.classList.toggle('on'); } }, t); return b; }));
@@ -259,11 +279,11 @@
     let area = x.area_id || (AREAS[0] || {}).id;
     const chips = h('div', { class: 'chips' }, AREAS.map(a => { const b = h('button', { class: a.id === area ? 'on' : '', style: { '--c': a.color }, onclick: () => { area = a.id; chips.querySelectorAll('button').forEach(z => z.classList.toggle('on', z === b)); } }, a.name); return b; }));
     const from = inp(iso(new Date()), '', 'date');
-    const body = h('div', {}, field('Name', name), isRt ? field('Check-in', rt) : null, field('Days', dchips), h('div', { class: 'grid2' }, field('Starts', tm), field('Ends (optional)', tme)), h('label', { class: 'item' }, rem, h('span', {}, 'Remind me at the start time (phone and PC)')),
-      field('Board', chips), x.id ? field('Changes start on (earlier days keep the old plan and times)', from) : null,
+    const body = h('div', {}, field('Name', name), field('Why', why), isRt ? field('Check-in', rt) : null, field('Days', dchips), h('div', { class: 'grid2' }, field('Starts', tm), field('Ends (optional)', tme)),
+      h('label', { class: 'item' }, rem, h('span', {}, 'Remind me at the start time (phone and PC)')), field('Board', chips), x.id ? field('Changes start on (earlier days keep the old plan and times)', from) : null,
       x.history && x.history.length ? h('div', { class: 'faint', style: { marginTop: '8px' } }, h('b', {}, 'Plan history'), ...x.history.map(l => h('div', {}, l))) : null);
     const btns = [['Save', 'primary', async () => {
-      try { await api('habit_save', { habit: { id: x.id, name: name.value, routine: isRt ? rt.value : '', days: days.sort(), time: tm.value || null, etime: tm.value && tme.value ? tme.value : null, remind: rem.checked && tm.value ? 0 : -1, area_id: area, kind: 'build' }, from_day: x.id ? from.value : null }); toast('Saved'); draw(); }
+      try { await api('habit_save', { habit: { id: x.id, name: name.value, why: why.value, routine: isRt ? rt.value : '', days: days.sort(), time: tm.value || null, etime: tm.value && tme.value ? tme.value : null, remind: rem.checked && tm.value ? 0 : -1, area_id: area, kind: 'build' }, from_day: x.id ? from.value : null }); toast('Saved'); draw(); }
       catch (e) { toast(e.message); return false; }
     }]];
     if (x.id) btns.unshift(['Stop it', 'danger', () => confirm(`Stop “${x.name}” from today? Its history stays.`) ? act('habit_end', { id: x.id }, 'Stopped') : false]);
@@ -272,53 +292,54 @@
   V.checkins = (p) => habitsView(p, true);
   V.habits = (p) => habitsView(p, false);
 
-  // ── Sleep ──
-  let SL = { mode: 'week', off: 0 };
+  // ── Sleep (a month, in a calendar) ──
+  let SL = { mode: 'month', off: 0 };
   V.sleep = async (p) => {
     const d = await api('sleep', SL);
-    const seg = h('div', { class: 'seg' }, [['week', 'Week'], ['month', 'Month'], ['30', '30 days']].map(([k, t]) => h('button', { class: SL.mode === k ? 'on' : '', onclick: () => { SL = { mode: k, off: 0 }; draw(); } }, t)));
-    const grid = h('div', { class: 'nights' });
-    for (let dt = new Date(d.start + 'T00:00'); dt <= new Date(d.end + 'T00:00'); dt.setDate(dt.getDate() + 1)) {
-      const k = iso(dt), r = d.nights[k]; const lab = dt.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
-      grid.append(h('div', { class: 'night' + (r ? ' has' : ''), style: r ? { '--c': r.color } : {}, onclick: () => sleepForm(k, r, d) }, h('div', { class: 'faint' }, lab),
-        r ? h('div', { class: 'h' }, hm(r.minutes)) : h('div', { class: 'faint' }, 'not logged'), r ? h('div', { class: 'faint' }, `${t12(r.bed.slice(11, 16))} → ${t12(r.wake.slice(11, 16))}`) : null));
+    const first = new Date(d.start + 'T00:00'); const lead = (first.getDay() + 6) % 7;
+    const grid = h('div', { class: 'mcal' }, ...DOW.map(t => h('div', { class: 'mh' }, t)));
+    const cell0 = new Date(first); cell0.setDate(cell0.getDate() - lead);
+    const last = new Date(d.end + 'T00:00'); const cells = Math.ceil((lead + last.getDate()) / 7) * 7;
+    for (let i = 0; i < cells; i++) {
+      const dt = new Date(cell0); dt.setDate(cell0.getDate() + i); const k = iso(dt); const inM = dt.getMonth() === first.getMonth(); const r = inM ? d.nights[k] : null;
+      grid.append(h('div', { class: 'mc' + (inM ? '' : ' out') + (r ? ' has' : '') + (k === iso(new Date()) ? ' today' : ''), style: r ? { '--c': r.color } : {}, onclick: () => inM && sleepForm(k, r, d) },
+        h('div', { class: 'dn' }, dt.getDate()), r ? h('div', { class: 'h' }, hm(r.minutes)) : null));
     }
-    p.replaceChildren(h('div', { class: 'card' }, h('h3', {}, `Every night ${t12(d.bed)} → ${t12(d.wake)}`), h('div', { class: 'muted' }, d.auto ? 'Each night fills in by itself on the desktop. If a night was different, tap it.' : 'Tap a night to log it.'),
-      h('div', { class: 'row', style: { marginTop: '10px' } }, h('button', { class: 'btn sm', onclick: () => usualForm(d) }, 'Change usual times'))),
-      h('div', { class: 'row', style: { margin: '6px 0 10px' } }, seg, h('div', { class: 'grow' }), h('button', { class: 'btn sm', onclick: () => { SL.off--; draw(); } }, '‹'), h('button', { class: 'btn sm', disabled: SL.off >= 0, onclick: () => { SL.off++; draw(); } }, '›')),
-      grid, h('div', { class: 'row faint', style: { marginTop: '10px' } }, h('span', { style: { color: 'var(--good)' } }, '● Good'), h('span', { style: { color: 'var(--poor)' } }, '● Poor'), h('span', { style: { color: 'var(--bad)' } }, '● Bad')));
+    const lab = first.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
+    p.replaceChildren(h('div', { class: 'card' }, h('h3', {}, `Every night ${t12(d.bed)} → ${t12(d.wake)}`, h('span', { class: 'sp' }), h('button', { class: 'btn sm', onclick: () => usualForm(d) }, 'Change usual times')),
+      h('div', { class: 'muted' }, d.auto ? 'Each night fills in by itself. If a night was different, tap it.' : 'Tap a night to log it.')),
+      h('div', { class: 'card' }, h('div', { class: 'row', style: { marginBottom: '8px' } }, h('button', { class: 'btn sm', onclick: () => { SL.off--; draw(); } }, '‹'), h('b', { class: 'grow', style: { textAlign: 'center' } }, lab),
+        h('button', { class: 'btn sm' + (SL.off ? ' primary' : ' soft'), onclick: () => { SL.off = 0; draw(); } }, 'This month'), h('button', { class: 'btn sm', disabled: SL.off >= 0, onclick: () => { SL.off++; draw(); } }, '›')),
+        grid, h('div', { class: 'row faint', style: { marginTop: '10px' } }, h('span', { style: { color: 'var(--good)' } }, '● Good'), h('span', { style: { color: 'var(--poor)' } }, '● Poor'), h('span', { style: { color: 'var(--bad)' } }, '● Bad'))));
   };
-  function sleepForm(night, r, d) {
-    const b = inp(r ? r.bed.slice(11, 16) : d.bed, '', 'time'), w = inp(r ? r.wake.slice(11, 16) : d.wake, '', 'time');
-    const btns = [['Save', 'primary', () => act('sleep_save', { night, bed: b.value, wake: w.value, id: r && r.id }, 'Saved')]];
-    if (r) btns.unshift(['Delete', 'danger', () => confirm('Delete this night?') ? act('sleep_delete', { id: r.id }, 'Deleted') : false]);
-    sheet(`Night of ${dayLab(night)}`, h('div', { class: 'grid2' }, field('In bed', b), field('Woke up', w)), btns);
-  }
-  function usualForm(d) {
-    const b = inp(d.bed, '', 'time'), w = inp(d.wake, '', 'time'), g = inp(d.goal, '', 'number');
-    sheet('Usual sleep', h('div', {}, h('div', { class: 'grid2' }, field('In bed', b), field('Up', w)), field('A good night = minutes of sleep', g)),
-      [['Save', 'primary', () => act('sleep_usual', { bed: b.value, wake: w.value, goal: g.value }, 'Saved')]]);
-  }
 
-  // ── NoFap ──
+  // ── Quit (anything: smoking, NoFap, sugar…) — one simple card each ──
   V.quit = async (p) => {
-    const qs = await api('quit'); const els = [h('div', { class: 'row', style: { marginBottom: '10px' } }, h('div', { class: 'grow' }), h('button', { class: 'btn', onclick: () => quitForm({}) }, '+ Something to quit'))];
+    const qs = await api('quit');
+    const els = [h('div', { class: 'row', style: { marginBottom: '10px' } }, h('div', { class: 'grow muted' }, 'When an urge comes press “I’m struggling”. If it happened, “I slipped” — the count starts again, your history stays.'),
+      h('button', { class: 'btn', onclick: () => quitForm({}) }, '+ Something to quit'))];
     if (!qs.length) els.push(h('div', { class: 'card empty' }, 'Nothing here yet.'));
     for (const q of qs) {
-      els.push(h('div', { class: 'card' }, h('h3', {}, q.name, h('span', { class: 'sp' }), h('button', { class: 'btn sm', onclick: () => quitForm(q) }, 'Edit')), h('div', { class: 'row' }, h('div', { class: 'big', style: { fontSize: '46px' } }, q.days), h('div', { class: 'muted' }, `days clean + ${q.hours} h`, h('br'), `best ${q.best} · ${q.beaten} urges beaten · ${q.relapses} slips`)),
-        h('div', { class: 'row', style: { marginTop: '10px', flexWrap: 'wrap' } }, h('button', { class: 'btn primary', style: { flex: 1 }, onclick: () => struggle(q.id, q) }, 'I’m struggling'),
-          h('button', { class: 'btn', onclick: () => urgeForm(q.id) }, 'Log urge'), h('button', { class: 'btn', onclick: () => slipped(q.id, q.name) }, 'I slipped'))));
-      if (q.why) els.push(h('div', { class: 'card' }, h('h3', {}, 'Why I’m doing this'), ...q.why.split('\n').filter(Boolean).map(l => h('div', {}, '•  ' + l))));
-      els.push(h('div', { class: 'card' }, h('h3', {}, 'Every streak'), ...q.streaks.map(s => h('div', { class: 'item' }, h('div', { class: 't' }, h('b', {}, `${s.days} days`), h('small', {}, `${s.start.slice(0, 10)} – ${s.current ? 'now' : s.end.slice(0, 10)}`)), s.current ? h('span', { class: 'pill', style: { '--c': 'var(--good)' } }, 'now') : null))));
+      els.push(h('div', { class: 'card' }, h('h3', {}, q.name, h('span', { class: 'sp' }), h('span', { class: 'faint' }, `best ${q.best} · ${q.beaten} urges beaten · ${q.relapses} slips`), h('button', { class: 'btn sm', onclick: () => quitForm(q) }, 'Edit')),
+        h('div', { class: 'row' }, h('div', { class: 'big', style: { fontSize: '46px' } }, q.days), h('div', { class: 'muted' }, h('b', {}, `day${q.days === 1 ? '' : 's'} without it`), ` + ${q.hours} h`, h('br'), 'since ' + new Date(q.since).toLocaleString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }))),
+        h('div', { class: 'row', style: { marginTop: '10px' } }, h('button', { class: 'btn primary', style: { flex: 2 }, onclick: () => struggle(q.id, q) }, 'I’m struggling'), h('button', { class: 'btn', style: { flex: 1 }, onclick: () => slipped(q.id, q.name) }, 'I slipped')),
+        q.why ? h('div', {}, h('div', { class: 'sec' }, 'WHY I’M DOING THIS'), ...q.why.split('\n').filter(Boolean).slice(0, 5).map(l => h('div', {}, '•  ' + l))) : null,
+        h('div', { class: 'sec' }, 'LATELY'), ...(q.events.length ? q.events.slice(0, 6).map(x => h('div', { class: 'row', style: { gap: '8px', margin: '3px 0' } },
+          h('span', { class: 'pill', style: { '--c': x.kind === 'urge' ? 'var(--good)' : 'var(--bad)' } }, x.kind === 'urge' ? 'Beat an urge' : 'Slipped'),
+          h('span', { class: 'faint' }, new Date(x.ts).toLocaleString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }) + (x.trigger ? ' · ' + x.trigger : '')))) : [h('div', { class: 'faint' }, 'Nothing yet.')])));
     }
     p.replaceChildren(...els);
   };
   function quitForm(q) {
-    const name = inp(q.name, 'e.g. NoFap, Smoking'); const why = h('textarea', { class: 'inp', rows: 4, placeholder: 'Why you are doing this — one reason per line' }, q.why || '');
-    const since = inp(q.id ? String(q.since || '').slice(0, 10) : iso(new Date()), '', 'date');
-    sheet(q.id ? 'Edit' : 'Something to quit', h('div', {}, field('Name', name), field('My reasons', why), q.id ? null : field('Clean since', since)),
-      [['Save', 'primary', () => act('quit_save', { id: q.id, name: name.value, why: why.value, start_day: q.id ? undefined : since.value }, 'Saved')]]);
+    const name = inp(q.name, 'e.g. Smoking, NoFap'); const why = h('textarea', { class: 'inp', rows: 4, placeholder: 'Why you are doing this — one reason per line' }, q.why || '');
+    const a = inp(q.time || '22:00', '', 'time'), b = inp(q.etime || '', '', 'time');
+    const since = inp(q.start_day || iso(new Date()), '', 'date'); since.max = iso(new Date());
+    sheet(q.id ? 'Edit' : 'Something to quit', h('div', {}, field('Name', name), h('div', { class: 'grid2' }, field('Risky time — from', a), field('to', b)),
+      h('div', { class: 'faint' }, 'When urges usually come. At that time you get a short, kind nudge with your first reason.'), field('My reasons', why),
+      field('Stopped on', since), h('div', { class: 'faint' }, 'Your day 1 — the days you stay away are counted from here. A slip starts the count again.')),
+      [['Save', 'primary', () => act('quit_save', { id: q.id, name: name.value, why: why.value, time: a.value || null, etime: b.value || null, start_day: since.value }, 'Saved')]]);
   }
+
   async function struggle(id, q) {
     q = q || (await api('quit')).find(x => x.id === id) || {};
     let left = 600; const clock = h('div', { class: 'timer' }, '10:00');
@@ -373,20 +394,157 @@
       h('div', { class: 'faint' }, 'For “once a day”, From is the time it comes. The brief tells the AI on the PC how to word it and when to be strict.')), btns);
   }
 
-  // ── Inspo (goals, dreams, notes) ──
+  // ── a Docs page, opened right here (Docs = the Notion-like part; it used to be called Pages) ──
+  function openDoc(pid, title) {
+    const theme = document.documentElement.dataset.theme || 'light';
+    const ov = h('div', { class: 'docov' }, h('div', { class: 'dochead' }, h('b', { class: 'grow' }, title || 'Page'),
+        h('button', { class: 'btn sm', onclick: () => { try { window.top.postMessage({ curio: 'openPage', id: pid }, location.origin); } catch (e) { /* same site */ } ov.remove(); } }, 'Open in Docs'),
+        h('button', { class: 'btn sm', onclick: () => { ov.remove(); draw(); } }, 'Close')),
+      h('iframe', { src: `/pages/index.html?theme=${theme}&embed=1#/documents/${pid}`, title: title || 'Page' }));
+    document.body.append(ov);
+  }
+
+  // ── Inspo: this year's goals (added / achieved dates, list or pictures), raw dreams (drag up = a goal), Today's spark, note cards ──
   const NOTE = ['#fff1b8', '#ffd8e4', '#d6ecff', '#d9f5e3', '#e9defc', '#ffe3cc'];
+  const dt = (s) => s ? new Date(s.length > 10 ? s : s + 'T12:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
+  const goalYear = (g) => +((g.due || g.created || iso(new Date())).slice(0, 4));
+  let IN = { year: new Date().getFullYear(), sec: null };
   V.inspo = async (p) => {
-    const d = await api('inspo'); const yr = new Date().getFullYear();
-    p.replaceChildren(h('div', { class: 'card' }, h('h3', {}, 'Goals'), ...d.goals.map(g => h('div', { class: 'item' + (g.done_at ? ' done' : '') }, chk(!!g.done_at, 'var(--good)', (on) => act('goal_done', { id: g.id, on })),
-        h('div', { class: 't' }, h('b', {}, g.title), h('small', {}, [g.why, g.due ? 'by ' + g.due : ''].filter(Boolean).join(' · '))))),
-      h('button', { class: 'btn sm', style: { marginTop: '8px' }, onclick: () => { const t = inp('', 'Goal'); sheet('New goal', field('Goal', t), [['Save', 'primary', () => act('goal_save', { goal: { kind: 'goal', title: t.value, due: `${yr}-12-31` } }, 'Saved')]]); } }, '+ Goal')),
-      d.dreams.length ? h('div', { class: 'card' }, h('h3', {}, 'Raw dreams'), ...d.dreams.map((g, i) => h('div', { class: 'item' }, h('b', {}, `${i + 1}.`), h('div', { class: 't' }, g.title)))) : null,
-      h('div', { class: 'card' }, h('h3', {}, 'Notes', h('span', { class: 'sp' }), h('button', { class: 'btn sm', onclick: () => noteForm({}) }, '+ Note')),
-        h('div', { class: 'grid2' }, ...d.notes.map(n => h('div', { class: 'note', style: { background: n.color || NOTE[n.id % NOTE.length] }, onclick: () => noteForm(n) }, n.title ? h('b', {}, n.title) : null, h('i', {}, n.text))))));
+    const d = await api('inspo'); const yr = IN.year;
+    const gs = d.goals.filter(g => goalYear(g) === yr);
+    const gcard = h('div', { class: 'card', ondragover: (e) => { e.preventDefault(); gcard.classList.add('drop'); }, ondragleave: () => gcard.classList.remove('drop'),
+      ondrop: async (e) => { e.preventDefault(); gcard.classList.remove('drop'); const id = +e.dataTransfer.getData('text/curio-dream'); if (id) await act('dream_to_goal', { id }, `It is a ${new Date().getFullYear()} goal now — set today`); } },
+      h('h3', {}, `${yr} Goals`, h('span', { class: 'sp' }), seg([['list', 'List'], ['pics', 'Pictures']], d.view, (k) => act('goal_view', { view: k })),
+        h('button', { class: 'btn sm', onclick: () => { IN.year--; draw(); } }, '‹'), h('button', { class: 'btn sm', onclick: () => { IN.year++; draw(); } }, '›'),
+        h('button', { class: 'btn sm', onclick: () => goalForm({ kind: 'goal' }) }, '+ Goal')));
+    if (d.view === 'pics' && gs.length) gcard.append(h('div', { class: 'gtiles' }, ...gs.map(g => h('div', { class: 'gtile' + (g.done_at ? ' done' : '') },
+      h('div', { class: 'gpic', style: g.pic ? { backgroundImage: `url("${g.pic}")` } : { background: NOTE[g.id % NOTE.length] }, onclick: () => g.page_id ? openDoc(g.page_id, g.title) : goalForm(g) }, g.pic ? null : (g.title || '?')[0].toUpperCase()),
+      h('div', { class: 'row', style: { gap: '6px', marginTop: '6px' } }, chk(!!g.done_at, 'var(--good)', (on) => act('goal_done', { id: g.id, on })), h('b', { class: 'grow', onclick: () => goalForm(g) }, g.title)),
+      h('div', { class: 'faint' }, g.done_at ? 'Achieved ' + dt(g.done_at) : 'Added ' + dt(g.created))))));
+    else gcard.append(...gs.map(g => h('div', { class: 'item' + (g.done_at ? ' done' : ''), onclick: () => goalForm(g) }, chk(!!g.done_at, 'var(--good)', (on) => act('goal_done', { id: g.id, on })),
+      h('div', { class: 't' }, h('b', {}, g.title), g.why ? h('small', {}, g.why.length > 140 ? g.why.slice(0, 137) + '…' : g.why) : null,
+        h('div', { class: 'row', style: { gap: '6px', marginTop: '4px', flexWrap: 'wrap' } }, g.created ? h('span', { class: 'pill', style: { '--c': 'var(--muted)' } }, 'Added ' + dt(g.created)) : null,
+          g.done_at ? h('span', { class: 'pill', style: { '--c': 'var(--good)' } }, 'Achieved ' + dt(g.done_at)) : null)))));
+    if (!gs.length) gcard.append(h('div', { class: 'empty' }, `What do you want to have done by the end of ${yr}? Drag a dream here (or tap → Goal) to start on it.`));
+    const dcard = h('div', { class: 'card' }, h('h3', {}, 'Raw dreams', h('span', { class: 'sp' }), h('button', { class: 'btn sm', onclick: () => goalForm({ kind: 'dream' }) }, '+ Dream')),
+      ...d.dreams.map((g, i) => h('div', { class: 'item', draggable: 'true', ondragstart: (e) => e.dataTransfer.setData('text/curio-dream', String(g.id)), onclick: () => goalForm(g) },
+        h('b', {}, `${i + 1}.`), h('div', { class: 't' }, h('b', {}, g.title), g.why ? h('small', {}, g.why) : null),
+        h('button', { class: 'btn sm', title: `Make it a ${new Date().getFullYear()} goal (set today)`, onclick: (e) => { e.stopPropagation(); act('dream_to_goal', { id: g.id }, 'It is a goal now — set today'); } }, '→ Goal'))),
+      d.dreams.length ? h('div', { class: 'faint' }, `Drag a dream up into ${yr} Goals (or press → Goal) when you start on it.`) : h('div', { class: 'empty' }, 'Big wishes, no dates. Just what you want and why it matters.'));
+    // the board of note cards
+    const secs = d.sections; if (IN.sec && !secs.includes(IN.sec)) IN.sec = null;
+    const notes = d.notes.filter(n => !IN.sec || n.section === IN.sec);
+    const bar = h('div', { class: 'row wrapr', style: { margin: '6px 0 10px' } }, seg([[null, 'All'], ...secs.map(s => [s, s])], IN.sec, (k) => { IN.sec = k; draw(); }),
+      IN.sec ? h('button', { class: 'btn sm soft', onclick: () => sectionMenu(IN.sec, secs) }, '⋯') : null, h('div', { class: 'grow' }),
+      h('button', { class: 'btn primary sm', onclick: () => noteForm({ section: IN.sec || secs[0] }) }, '+ Quote / note'));
+    const board = h('div', { class: 'masonry' }, ...notes.map(n => h('div', { class: 'note', style: { background: n.color || NOTE[n.id % NOTE.length] }, onclick: () => noteForm(n) },
+      n.title ? h('b', {}, n.title) : null, n.text ? h('i', {}, n.text) : null,
+      h('div', { class: 'nmeta' }, [IN.sec ? '' : n.section, dt(n.created)].filter(Boolean).join(' · '), n.page_id ? h('span', { class: 'pill', style: { '--c': 'var(--accent)' } }, 'Page') : null))));
+    p.replaceChildren(h('div', { class: 'faint', style: { marginBottom: '8px' } }, 'Pictures and videos of your board stay on the PC; here you have your goals, dreams and note cards.'),
+      h('div', { class: 'ins' }, h('div', {}, gcard, dcard), sparkCard(d.spark)), bar, notes.length ? board : h('div', { class: 'card empty' }, 'No note cards here yet.'));
   };
+  function sparkCard(s) {
+    const it = s.item; const left = s.left;
+    const every = h('select', { class: 'inp sm', onchange: (e) => act('spark_hours', { hours: +e.target.value }) }, [1, 2, 3, 4, 6, 12, 24].map(k => h('option', { value: k, selected: k === s.hours }, k < 24 ? `every ${k} h` : 'once a day')));
+    const head = h('div', { class: 'row', style: { gap: '8px', marginBottom: '8px' } }, h('span', { class: 'sec', style: { margin: 0 } }, 'TODAY’S SPARK'),
+      h('span', { class: 'faint grow' }, '· new in ' + (left >= 3600 ? `${Math.floor(left / 3600)} h ${Math.floor(left % 3600 / 60)} min` : `${Math.max(1, Math.floor(left / 60))} min`)), every,
+      h('button', { class: 'btn sm', onclick: () => act('spark_next', {}) }, 'Next ↻'));
+    if (!it) return h('div', { class: 'card spark' }, head, h('div', { class: 'muted' }, 'Add goals, dreams or note cards — one of them shows here and changes every few hours.'));
+    const isCard = it.spark === 'card'; const kind = isCard ? it.section : it.spark === 'goal' ? `${goalYear(it)} goal` : 'Dream';
+    const line = (isCard ? it.text : it.why) || ''; const short = line.length > 220 ? line.slice(0, 217) + '…' : line;
+    return h('div', { class: 'card spark' }, head, h('div', { class: 'sbody' },
+      h('div', { class: 'stile', style: { background: NOTE[it.id % NOTE.length] } }, (it.title || '✦')[0].toUpperCase()),
+      h('div', { class: 'grow' }, h('span', { class: 'pill', style: { '--c': 'var(--accent)' } }, kind), it.title ? h('div', { class: 'st' }, it.title) : null, short ? h('div', { class: 'sq' }, `“${short}”`) : null,
+        it.created ? h('div', { class: 'faint' }, (isCard ? 'Added ' : 'Set on ') + dt(it.created)) : null,
+        h('div', { class: 'row', style: { gap: '6px', marginTop: '8px', flexWrap: 'wrap' } }, it.page_id ? h('button', { class: 'btn sm', onclick: () => openDoc(it.page_id, it.title) }, 'Open page') : null,
+          h('button', { class: 'btn sm soft', onclick: () => act(isCard ? 'card_spark' : 'goal_save', isCard ? { id: it.id, off: true } : { goal: { id: it.id, no_spark: 1 } }, 'It will not show in Spark') }, 'Don’t show in Spark')))));
+  }
+  function goalForm(g) {
+    const dream = g.kind === 'dream'; const t = inp(g.title, dream ? 'A big wish' : 'e.g. iPhone 16 Pro'), why = inp(g.why, 'Why it matters');
+    const added = inp((g.created || iso(new Date())).slice(0, 10), '', 'date'), got = inp((g.done_at || '').slice(0, 10), '', 'date');
+    const body = h('div', {}, field(dream ? 'Dream' : 'Goal', t), field('Why it matters', why),
+      dream ? null : h('div', { class: 'grid2' }, field('Added on', added), field('Achieved on (empty = not yet)', got)),
+      g.id && !dream ? h('div', { class: 'faint', style: { marginTop: '8px' } }, 'Each goal has its own page in Docs › Inspo › Goals — add pictures and notes there.') : null);
+    const keep = (old, v) => old && old.slice(0, 10) === v ? old : (v ? v + 'T12:00:00' : null);
+    const btns = [['Save', 'primary', async () => {
+      const v = { id: g.id, kind: g.kind || 'goal', title: t.value, why: why.value };
+      if (!dream) { v.created = keep(g.created, added.value) || g.created; v.done_at = keep(g.done_at, got.value); }
+      try { await api('goal_save', { goal: v }); toast('Saved'); draw(); } catch (e) { toast(e.message); return false; }
+    }]];
+    if (g.id) {
+      btns.unshift(['Delete', 'danger', () => confirm(`Delete “${g.title}”? Its page in Docs stays (marked Removed).`) ? act('goal_delete', { id: g.id }, 'Deleted') : false]);
+      if (g.page_id) btns.unshift(['Open page', '', () => { openDoc(g.page_id, g.title); }]);
+      btns.unshift([g.no_spark ? 'Show in Spark' : 'Don’t show in Spark', 'soft', () => act('goal_save', { goal: { id: g.id, no_spark: g.no_spark ? 0 : 1 } }, 'Saved')]);
+      if (dream) btns.unshift(['→ Goal', '', () => act('dream_to_goal', { id: g.id }, 'It is a goal now — set today')]);
+    }
+    sheet(g.id ? (dream ? 'Dream' : 'Goal') : dream ? 'New dream' : 'New goal', body, btns); setTimeout(() => t.focus(), 250);
+  }
   function noteForm(n) {
     const t = inp(n.title, 'Title'), x = h('textarea', { class: 'inp', rows: 4, placeholder: 'A line, a quote, a reminder' }, n.text || '');
-    sheet(n.id ? 'Edit note' : 'New note', h('div', {}, field('Title', t), field('Text', x)), [['Save', 'primary', () => act('note_save', { id: n.id, title: t.value, text: x.value, color: n.color || '' }, 'Saved')]]);
+    const btns = [['Save', 'primary', () => act('note_save', { id: n.id, section: n.section, title: t.value, text: x.value, color: n.color || '' }, 'Saved')]];
+    if (n.id) {
+      btns.unshift(['Remove', 'danger', () => confirm('Remove this card from the board?') ? act('note_delete', { id: n.id }, 'Removed') : false]);
+      btns.unshift([n.no_spark ? 'Show in Spark' : 'Don’t show in Spark', 'soft', () => act('card_spark', { id: n.id, off: !n.no_spark }, 'Saved')]);
+      btns.unshift([n.page_id ? 'Open page' : 'Convert into page', '', async () => { try { const r = await api('card_page', { id: n.id }); openDoc(r.page_id, n.title || n.section); } catch (e) { toast(e.message); return false; } }]);
+    }
+    sheet(n.id ? 'Card' : 'New card', h('div', {}, field('Title', t), field('Text', x)), btns);
+  }
+  function sectionMenu(sec, secs) {
+    const nm = inp(sec, 'Name'); const others = secs.filter(s => s !== sec);
+    const to = h('select', { class: 'inp' }, others.map(s => h('option', { value: s }, s)));
+    sheet(`Section “${sec}”`, h('div', {}, field('Rename', nm), others.length ? field('Delete it — its cards move to', to) : null),
+      [...(others.length ? [['Delete section', 'danger', () => confirm(`Delete “${sec}”? Its cards are not deleted — they move to “${to.value}”.`) ? act('section_delete', { name: sec, move_to: to.value }, 'Deleted').then(() => { IN.sec = null; }) : false]] : []),
+       ['Rename', 'primary', async () => { try { await api('section_rename', { old: sec, new: nm.value }); IN.sec = nm.value.trim(); draw(); } catch (e) { toast(e.message); return false; } }]]);
+  }
+
+  // ── Notes: sticky notes, sized by what is on them; your own categories (colour, rename, delete) ──
+  const NT = { tag: null, q: '' };
+  V.notes = async (p) => {
+    const d = await api('notes', { tag: NT.tag, q: NT.q }); const col = Object.fromEntries(d.tags.map(t => [t.name, t.color]));
+    if (NT.tag && !col[NT.tag]) NT.tag = null;
+    const colorOf = (n) => n.color || (n.tags || []).map(t => col[t]).find(Boolean) || d.palette[0][1];
+    const q = inp(NT.q, 'Search notes…'); q.addEventListener('keydown', (e) => { if (e.key === 'Enter') { NT.q = q.value.trim(); draw(); } });
+    const chips = h('div', { class: 'tagbar' }, h('button', { class: 'tg' + (NT.tag ? '' : ' on'), onclick: () => { NT.tag = null; draw(); } }, 'All'),
+      ...d.tags.map(t => h('button', { class: 'tg' + (NT.tag === t.name ? ' on' : ''), onclick: () => { if (NT.tag === t.name) tagMenu(t, d.palette); else { NT.tag = t.name; draw(); } },
+        oncontextmenu: (e) => { e.preventDefault(); tagMenu(t, d.palette); }, title: 'Tap again (or right-click) to rename, colour or delete' }, h('i', { style: { background: t.color } }), t.name)),
+      h('button', { class: 'tg add', onclick: async () => { const n = prompt('New category (e.g. Business, Gym, Family):'); if (n && n.trim()) { await api('tag_add', { name: n }).catch(e => toast(e.message)); NT.tag = n.trim(); draw(); } } }, '+ Category'));
+    // the first card: a new note
+    let picked = NT.tag ? [NT.tag] : [];
+    const ti = inp('', 'Title'), tx = h('textarea', { class: 'inp', rows: 3, placeholder: 'Something that hit you, an idea, a win…' });
+    const catb = h('button', { class: 'btn sm soft' }); const showCat = () => { catb.textContent = picked.length ? '🏷 ' + picked.join(', ') : '🏷 Category ▾'; }; showCat();
+    catb.onclick = () => { const box = h('div', { class: 'chips' }, ...d.tags.map(t => { const b = h('button', { class: picked.includes(t.name) ? 'on' : '', style: { '--c': t.color }, onclick: () => { picked = picked.includes(t.name) ? picked.filter(z => z !== t.name) : [...picked, t.name]; b.classList.toggle('on'); showCat(); } }, t.name); return b; }));
+      sheet('Category', box, []); };
+    const comp = h('div', { class: 'sticky new' }, h('b', {}, 'New note'), ti, tx, h('div', { class: 'row' }, catb, h('div', { class: 'grow' }),
+      h('button', { class: 'btn sm primary', onclick: async () => { if (!ti.value.trim() && !tx.value.trim()) return; try { await api('notes_save', { note: { title: ti.value, content: tx.value, tags: picked } }); draw(); } catch (e) { toast(e.message); } } }, 'Save')));
+    const ago = (s) => { if (!s) return ''; const k = Math.floor((new Date() - new Date(s)) / 864e5); return k <= 0 ? 'today' : k === 1 ? 'yesterday' : k < 30 ? `${k} days ago` : dt(s); };
+    const tile = (n, mem) => h('div', { class: 'sticky', style: { background: colorOf(n) }, onclick: () => stickyForm(n, d) }, mem ? h('div', { class: 'mem' }, 'MEMORY OF THE DAY') : null,
+      n.title ? h('b', {}, n.title) : null, n.content ? h('div', { class: 'tx' }, n.content.length > 700 ? n.content.slice(0, 700) + '…' : n.content) : null,
+      h('div', { class: 'foot' }, ...(n.tags || []).slice(0, 3).map(t => h('span', {}, t)), h('div', { class: 'grow' }), n.pinned ? '📌' : null, h('small', {}, ago(n.created))));
+    const list = d.notes.filter(n => !(d.memory && n.id === d.memory.id && !NT.tag && !NT.q));
+    p.replaceChildren(h('div', { class: 'row wrapr', style: { marginBottom: '10px' } }, chips, h('div', { class: 'grow' }), h('div', { style: { width: '220px' } }, q)),
+      h('div', { class: 'masonry' }, comp, d.memory && !NT.tag && !NT.q ? tile(d.memory, true) : null, ...list.map(n => tile(n))),
+      ...(d.notes.length ? [] : [h('div', { class: 'empty' }, NT.q ? 'Nothing found.' : 'No notes here yet — write one in the first card.')]));
+  };
+  function stickyForm(n, d) {
+    const t = inp(n.title, 'Title'), x = h('textarea', { class: 'inp', rows: 6 }, n.content || ''); let tags = (n.tags || []).slice(), color = n.color || '';
+    const tg = h('div', { class: 'chips' }, ...d.tags.map(c => { const b = h('button', { class: tags.includes(c.name) ? 'on' : '', style: { '--c': c.color }, onclick: () => { tags = tags.includes(c.name) ? tags.filter(z => z !== c.name) : [...tags, c.name]; b.classList.toggle('on'); } }, c.name); return b; }));
+    const sw = h('div', { class: 'swatches' }, h('button', { class: color ? '' : 'on', title: 'Same as its category', style: { background: 'linear-gradient(135deg,#fff6b3,#dcecff)' }, onclick: (e) => { color = ''; mark(e); } }),
+      ...d.palette.map(([nm, c]) => h('button', { class: color === c ? 'on' : '', title: nm, style: { background: c }, onclick: (e) => { color = c; mark(e); } })));
+    function mark(e) { sw.querySelectorAll('button').forEach(z => z.classList.toggle('on', z === e.currentTarget)); }
+    const pin = h('input', { type: 'checkbox', checked: !!n.pinned }), res = h('input', { type: 'checkbox', checked: n.resurface !== 0 });
+    sheet('Note', h('div', {}, field('Title', t), field('Note', x), field('Category', tg), field('Colour', sw),
+      h('label', { class: 'item' }, pin, h('span', {}, 'Pin to the top')), h('label', { class: 'item' }, res, h('span', {}, 'Bring it back to me as a “Memory of the day”'))),
+      [['Delete', 'danger', () => confirm('Delete this note for good?') ? act('notes_delete', { id: n.id }, 'Deleted') : false],
+       ['Archive', 'soft', () => act('notes_archive', { id: n.id }, 'Archived')],
+       ['Save', 'primary', () => act('notes_save', { note: { id: n.id, title: t.value, content: x.value, tags, color, pinned: pin.checked ? 1 : 0, resurface: res.checked ? 1 : 0 } }, 'Saved')]]);
+  }
+  function tagMenu(t, palette) {
+    const nm = inp(t.name, 'Name'); let color = t.color;
+    const sw = h('div', { class: 'swatches' }, ...palette.map(([n, c]) => h('button', { class: c === color ? 'on' : '', title: n, style: { background: c }, onclick: (e) => { color = c; sw.querySelectorAll('button').forEach(z => z.classList.toggle('on', z === e.currentTarget)); } })));
+    sheet(`Category “${t.name}”`, h('div', {}, field('Name', nm), field('Colour of its notes', sw)),
+      [['Delete', 'danger', () => confirm(`Delete “${t.name}”? Its notes stay — they just lose this label.`) ? act('tag_delete', { name: t.name }, 'Deleted').then(() => { NT.tag = null; }) : false],
+       ['Save', 'primary', async () => { try { if (nm.value.trim() !== t.name) { await api('tag_rename', { old: t.name, new: nm.value }); NT.tag = nm.value.trim(); }
+         await api('tag_color', { name: nm.value.trim() || t.name, color }); draw(); } catch (e) { toast(e.message); return false; } }]]);
   }
 
   // ── Phone: reminders on this phone ──
@@ -413,6 +571,14 @@
       } catch (e) { toast(e.message); }
     }
     state();
+    // 10.43: is the free reminder service (cron-job.org) really calling Curio every minute?
+    const svc = h('div', { class: 'muted' }, 'Checking…');
+    post('/api/tracker/push', { op: 'status' }).then(r => {
+      const ago = r.ago == null ? null : Math.round(r.ago / 60);
+      svc.replaceChildren(h('div', { style: { color: ago != null && ago <= 3 ? 'var(--good)' : 'var(--bad)', fontWeight: 700 } },
+        ago == null ? '✗ The reminder service has never called Curio — reminders cannot come yet. Do step 2 below.' : ago <= 3 ? `✓ Working — the reminder service called ${ago <= 1 ? 'just now' : ago + ' min ago'}.` : `✗ Not working — the last call was ${ago < 120 ? ago + ' min' : Math.round(ago / 60) + ' h'} ago. Check the job on cron-job.org.`),
+        h('div', { class: 'faint' }, `Phones with reminders on: ${r.phones}` + (r.kinds.length ? ` (${r.kinds.join(', ')})` : '')));
+    }).catch(e => { svc.textContent = e.message; });
     const file = h('input', { type: 'file', accept: '.db', class: 'inp' }); const rep = h('input', { type: 'checkbox' }); const imp = h('div', { class: 'muted' });
     const go = h('button', { class: 'btn', onclick: async () => {
       const f = file.files[0]; if (!f) { toast('Pick myday.db first'); return; }
@@ -426,8 +592,9 @@
       go.disabled = false;
     } }, 'Copy it to the web');
     p.replaceChildren(h('div', { class: 'card' }, h('h3', {}, 'Copy your desktop Tracker here (one time)'),
-        h('p', { class: 'muted' }, 'On the PC: Tracker › Plan › “Open the data folder” — the file is myday.db. Pick it here. (Your screen record stays on the PC.)'),
+        h('p', { class: 'muted' }, 'On the PC: Tracker › Review › “Open the data folder” — the file is myday.db. Pick it here. (Your screen record stays on the PC.)'),
         file, h('label', { class: 'item' }, rep, h('span', {}, 'Replace what is on the web')), h('div', { class: 'row' }, go), imp),
+      h('div', { class: 'card' }, h('h3', {}, 'Is the reminder service working?'), svc),
       h('div', { class: 'card' }, h('h3', {}, 'Reminders on this phone'), st, h('div', { class: 'row', style: { marginTop: '10px', flexWrap: 'wrap' } }, on, test),
       h('p', { class: 'faint' }, 'First add Curio to your home screen (browser menu › Add to Home screen) and open it from there.')),
       h('div', { class: 'card' }, h('h3', {}, 'The every-minute check (one time setup)'),

@@ -139,6 +139,7 @@ def app(env, start):
                 elif op == 'subs': data = push.subs()
                 elif op == 'test': data = {'sent': push.notify([('Curio test', 'Phone reminders work.', 'test', '/#/tracker')])}
                 elif op == 'tick_url': data = {'url': f"{r.origin}/api/tracker/tick?key={push.tick_key()}"}
+                elif op == 'status': data = push.status()                       # 10.43: is the reminder service calling, and which phones are on
                 else: raise ValueError(f'Unknown: {op}')
                 return send('200 OK', {'ok': True, 'data': data})
             except ValueError as e: return send('200 OK', {'error': str(e)})

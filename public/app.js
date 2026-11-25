@@ -45,7 +45,7 @@
     ['Library', [['moodboard', 'Moodboard', 'grid'], ['boards', 'My Boards', 'bookmark'], ['bookmarks', 'Bookmarks', 'globe'], ['insights', 'Insights', 'chart'], ['rediscover', 'Rediscover', 'spark']]],
     ['Media', [['creators', 'Creators', 'users'], ['youtube', 'YouTube', 'play'], ['songs', 'Songs', 'music']]],
     ['AI', [['ask', 'Ask AI · ChatGPT', 'bot'], ['notebooks', 'Notebooks', 'book']]],
-    ['Workspace', [['tracker', 'Tracker', 'check'], ['pages', 'Pages', 'page'], ['finance', 'Finance', 'wallet'], ['calendar', 'Calendar', 'cal']]],
+    ['Workspace', [['tracker', 'Tracker', 'check'], ['pages', 'Docs', 'page'], ['finance', 'Finance', 'wallet'], ['calendar', 'Calendar', 'cal']]],
     ['Platforms', [['instagram', 'Instagram', 'insta'], ['pinterest', 'Pinterest', 'pin'], ['ytsync', 'YouTube', 'play'], ['facebook', 'Facebook', 'fb']]],
   ];
   const TITLE = Object.fromEntries(NAV.flatMap(([, items]) => items.map(([k, t]) => [k, t]))); TITLE.settings = 'Settings';
@@ -103,7 +103,7 @@
       h('p', { class: 'sub', style: 'max-width:520px;margin:8px auto 22px' }, ai
         ? 'ChatGPT is coming to Curio Web with “Sign in with ChatGPT” — the same account you use in the desktop app, no API key. Until then it works in the desktop app.'
         : 'This part of Curio works in the desktop app. On the web it is coming soon — Pages and Finance are already here.'),
-      h('div', { class: 'row', style: 'justify-content:center' }, h('a', { class: 'btn primary', href: '#/pages' }, ic('page'), 'Open Pages'), h('a', { class: 'btn', href: '#/finance' }, ic('wallet'), 'Open Finance')))));
+      h('div', { class: 'row', style: 'justify-content:center' }, h('a', { class: 'btn primary', href: '#/pages' }, ic('page'), 'Open Docs'), h('a', { class: 'btn', href: '#/finance' }, ic('wallet'), 'Open Finance')))));
   }
 
   const money = (m, cur) => {
@@ -137,12 +137,14 @@
     const recent = docs.filter(d => !d.isArchived).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)).slice(0, 6);
     grid.append(h('div', { class: 'card' }, h('h3', {}, 'Recent pages'),
       recent.length ? h('div', { class: 'links' }, recent.map(d => h('a', { href: '#/pages', onclick: () => openPage(d.id) }, h('span', {}, d.icon || '📄'), d.title || 'Untitled')))
-        : h('p', {}, 'No pages yet.'), h('div', { class: 'row', style: 'margin-top:12px' }, h('a', { class: 'btn', href: '#/pages' }, ic('page'), 'Open Pages'))));
+        : h('p', {}, 'No pages yet.'), h('div', { class: 'row', style: 'margin-top:12px' }, h('a', { class: 'btn', href: '#/pages' }, ic('page'), 'Open Docs'))));
   }
   async function pagesList() {
     const r = await fetch('/api/pages/rpc', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-Curio': '1' }, body: JSON.stringify({ o: 'curio', m: 'list', a: [] }) });
     const j = await r.json(); return Array.isArray(j) ? j : [];
   }
+  // 10.43: a page opened inside the Tracker asks for the full Docs
+  window.addEventListener('message', (e) => { if (e.origin === location.origin && e.data && e.data.curio === 'openPage' && e.data.id) { location.hash = '#/pages'; setTimeout(() => openPage(e.data.id), 60); } });
   function openPage(id) {
     const v = frame('pages', '/pages/index.html?theme=' + theme() + '#/documents/' + id);
     const f = v.querySelector('iframe'); try { f.contentWindow.location.hash = '#/documents/' + id; } catch (e) { /* first load uses the src */ }

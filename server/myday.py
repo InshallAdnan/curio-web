@@ -153,7 +153,10 @@ NEW_COLUMNS = [('tasks', 'status', "TEXT DEFAULT 'todo'"), ('habit_log', 'note',
                ('focus_sessions', 'run', "TEXT DEFAULT ''"), ('focus_sessions', 'intent', "TEXT DEFAULT ''"), ('focus_sessions', 'rating', 'INTEGER'),
                ('tasks', 'series', 'INTEGER'), ('tasks', 'repeat_end', 'TEXT'), ('tasks', 'snooze_until', 'TEXT'),
                ('sleep', 'auto', 'INTEGER DEFAULT 0'), ('sleep', 'source', "TEXT DEFAULT ''"), ('inspo', 'color', "TEXT DEFAULT ''"), ('nudges', 'brief', "TEXT DEFAULT ''"),
-               ('habits', 'etime', 'TEXT'), ('habit_periods', 'etime', 'TEXT'), ('tasks', 'auto', 'INTEGER DEFAULT 0')]
+               ('habits', 'etime', 'TEXT'), ('habit_periods', 'etime', 'TEXT'), ('tasks', 'auto', 'INTEGER DEFAULT 0'),
+               ('tasks', 'why', "TEXT DEFAULT ''"), ('inspo', 'no_spark', 'INTEGER DEFAULT 0'), ('inspo', 'page_id', "TEXT DEFAULT ''"),
+               ('goals', 'thumb', "TEXT DEFAULT ''"), ('goals', 'no_spark', 'INTEGER DEFAULT 0'), ('notes', 'color', "TEXT DEFAULT ''"),   # 10.42
+               ('goals', 'page_id', "TEXT DEFAULT ''")]   # 10.43
 
 
 def _add_columns(c):
@@ -258,6 +261,7 @@ def save_task(c, t):
         tid = c.execute('INSERT INTO tasks(title, area_id, day, time, minutes, repeat, remind, note, link, priority, status, created, updated) '
                         'VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)', vals + (stamp(), stamp())).lastrowid
     if 'repeat_end' in t: c.execute('UPDATE tasks SET repeat_end=? WHERE id=?', (t['repeat_end'] or None, tid))
+    if 'why' in t: c.execute('UPDATE tasks SET why=? WHERE id=?', ((t.get('why') or '').strip()[:300], tid))      # 10.42: one line — why this task
     c.commit(); return tid
 
 
@@ -728,7 +732,70 @@ def save_note(c, n):
     vals = (n.get('title', '').strip()[:200], n.get('content', ''), json.dumps(n.get('tags') or []), int(n.get('pinned', 0)), int(n.get('resurface', 1)))
     if n.get('id'): c.execute('UPDATE notes SET title=?, content=?, tags=?, pinned=?, resurface=? WHERE id=?', vals + (n['id'],)); nid = n['id']
     else: nid = c.execute('INSERT INTO notes(title, content, tags, pinned, resurface, created) VALUES(?,?,?,?,?,?)', vals + (stamp(),)).lastrowid
+    if 'color' in n: c.execute('UPDATE notes SET color=? WHERE id=?', (n.get('color') or '', nid))
     c.commit(); return nid
+
+
+def delete_note(c, nid): c.execute('DELETE FROM notes WHERE id=?', (nid,)); c.commit()
+
+
+# 10.42: the note categories are yours (add, rename, delete)
+def note_tags(c):
+    try: v = json.loads(setting(c, 'note_tags') or 'null')
+    except Exception: v = None
+    return v if isinstance(v, list) else list(NOTE_TAGS)
+
+
+def _set_note_tags(c, tags): set_setting(c, 'note_tags', json.dumps(tags)); c.commit()
+
+
+# 10.43: sticky-note colours (light, like real sticky notes); each category can have its own
+STICKY = [('Yellow', '#fff6b3'), ('Peach', '#ffe2c6'), ('Pink', '#ffdbe7'), ('Lilac', '#ece3ff'), ('Sky', '#dcecff'),
+          ('Mint', '#d9f6ea'), ('Lime', '#eaf7d2'), ('Sand', '#f2ebdf'), ('Grey', '#eeeef1')]
+
+
+def note_tag_colors(c):
+    try: v = json.loads(setting(c, 'note_tag_colors') or '{}')
+    except Exception: v = {}
+    tags = note_tags(c)
+    return {t: v.get(t) or STICKY[i % len(STICKY)][1] for i, t in enumerate(tags)}
+
+
+def set_note_tag_color(c, tag, col):
+    try: v = json.loads(setting(c, 'note_tag_colors') or '{}')
+    except Exception: v = {}
+    v[tag] = col; set_setting(c, 'note_tag_colors', json.dumps(v)); c.commit()
+
+
+def add_note_tag(c, name):
+    name = (name or '').strip()[:30]; tags = note_tags(c)
+    if not name or name in tags: return False
+    _set_note_tags(c, tags + [name]); return True
+
+
+def rename_note_tag(c, old, new):
+    new = (new or '').strip()[:30]; tags = note_tags(c)
+    if not new or old not in tags or (new in tags and new != old): return False
+    _set_note_tags(c, [new if x == old else x for x in tags])
+    try:
+        v = json.loads(setting(c, 'note_tag_colors') or '{}')
+        if old in v: v[new] = v.pop(old); set_setting(c, 'note_tag_colors', json.dumps(v))
+    except Exception: pass
+    for r in c.execute('SELECT id, tags FROM notes').fetchall():
+        t = json.loads(r[1] or '[]')
+        if old in t: c.execute('UPDATE notes SET tags=? WHERE id=?', (json.dumps([new if x == old else x for x in t]), r[0]))
+    c.commit(); return True
+
+
+def delete_note_tag(c, name):
+    """the category goes; its notes stay (they just lose this label)"""
+    tags = note_tags(c)
+    if name not in tags: return False
+    _set_note_tags(c, [x for x in tags if x != name])
+    for r in c.execute('SELECT id, tags FROM notes').fetchall():
+        t = json.loads(r[1] or '[]')
+        if name in t: c.execute('UPDATE notes SET tags=? WHERE id=?', (json.dumps([x for x in t if x != name]), r[0]))
+    c.commit(); return True
 
 
 def archive_note(c, nid, on=True): c.execute('UPDATE notes SET archived=? WHERE id=?', (1 if on else 0, nid)); c.commit()
@@ -1325,7 +1392,7 @@ def add_inspo(c, kind, section='My Inspo', title='', text='', path='', ref='', u
 
 
 def update_inspo(c, iid, **kw):
-    for k in ('section', 'title', 'text', 'pinned', 'habit_id', 'path', 'kind', 'sort', 'color'):
+    for k in ('section', 'title', 'text', 'pinned', 'habit_id', 'path', 'kind', 'sort', 'color', 'no_spark', 'page_id'):
         if k in kw: c.execute(f'UPDATE inspo SET {k}=? WHERE id=?', (kw[k], iid))
     c.commit()
 
@@ -1335,11 +1402,18 @@ def remove_inspo(c, iid):
     c.execute('DELETE FROM inspo WHERE id=?', (iid,)); c.commit()
 
 
-def keep_file(src):
-    """copy a dropped / chosen file into <data>/myday/inspo so the board keeps working if the original moves"""
+def section_dir(section=None):
+    """10.42: each Inspo section keeps its own folder: <data>/myday/inspo/<section>"""
+    import re
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', '_', (section or '').strip()).strip(' .')[:40]
+    d = INSPO_DIR / name if name else INSPO_DIR; d.mkdir(parents=True, exist_ok=True); return d
+
+
+def keep_file(src, section=None):
+    """copy a dropped / chosen file into <data>/myday/inspo/<section> so the board keeps working if the original moves"""
     import shutil, uuid
-    src = Path(src); INSPO_DIR.mkdir(parents=True, exist_ok=True)
-    out = INSPO_DIR / f'{uuid.uuid4().hex[:12]}{src.suffix.lower()}'; shutil.copy2(src, out); return out
+    src = Path(src); d = section_dir(section)
+    out = d / f'{uuid.uuid4().hex[:12]}{src.suffix.lower()}'; shutil.copy2(src, out); return out
 
 
 def kind_of(path):
@@ -1361,6 +1435,31 @@ def inspo_pick(c, salt=''):
     return random.Random(iso(today()) + str(salt)).choice(pool)
 
 
+# 10.42: Today's spark on Inspo — one thing at a time from your cards, goals and dreams; a new one every few hours
+def spark_hours(c):
+    try: return max(1, int(setting(c, 'inspo_spark_hours') or 3))
+    except Exception: return 3
+
+
+def spark_pool(c):
+    out = [dict(i, spark='card') for i in inspo_items(c) if i['kind'] in ('image', 'video', 'media', 'quote', 'link') and not i.get('no_spark')]
+    for g in goals(c, 'goal', False) + goals(c, 'dream', False):
+        if not g.get('no_spark'): out.append(dict(g, spark=g['kind']))
+    return out
+
+
+def spark_slot(c, now=None):
+    import time as _t
+    return int((now or _t.time()) // (spark_hours(c) * 3600)) + int(setting(c, 'inspo_spark_skip') or 0)
+
+
+def spark_pick(c, now=None):
+    pool = spark_pool(c)
+    if not pool: return None
+    pool.sort(key=lambda x: (x['spark'], x['id']))
+    return random.Random(spark_slot(c, now) * 7919 + len(pool)).choice(pool)
+
+
 def goals(c, kind='goal', done=None):
     q, a = 'SELECT * FROM goals WHERE kind=?', [kind]
     if done is True: q += ' AND done_at IS NOT NULL'
@@ -1372,7 +1471,18 @@ def save_goal(c, g):
     v = (g.get('kind', 'goal'), g['title'].strip()[:200], g.get('why', ''), g.get('due') or None, int(g.get('progress') or 0))
     if g.get('id'): c.execute('UPDATE goals SET kind=?, title=?, why=?, due=?, progress=? WHERE id=?', v + (g['id'],)); gid = g['id']
     else: gid = c.execute('INSERT INTO goals(kind, title, why, due, progress, created) VALUES(?,?,?,?,?,?)', v + (stamp(),)).lastrowid
+    for k in ('thumb', 'no_spark', 'created', 'done_at'):                                 # 10.42: picture, spark, the two dates
+        if k in g: c.execute(f'UPDATE goals SET {k}=? WHERE id=?', (g[k], gid))
     c.commit(); return gid
+
+
+def dream_to_goal(c, gid):
+    """10.42: a dream dragged into this year's goals — it becomes a goal set today"""
+    c.execute("UPDATE goals SET kind='goal', created=?, due=NULL, done_at=NULL WHERE id=?", (stamp(), gid)); c.commit()
+
+
+def goal_year(g):
+    return int(((g.get('due') or g.get('created') or iso(today())))[:4])
 
 
 def goal_done(c, gid, on=True): c.execute('UPDATE goals SET done_at=? WHERE id=?', (stamp() if on else None, gid)); c.commit()

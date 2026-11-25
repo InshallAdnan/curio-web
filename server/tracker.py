@@ -75,7 +75,7 @@ def _sleep_row(c, r):
 
 def _quit(c, h):
     st = M.quit_stats(c, h)
-    return dict(id=h['id'], name=h['name'], why=h['why'], days=st['days'], hours=st['hours'], since=st['since'], best=st['best'], beaten=st['beaten'],
+    return dict(id=h['id'], name=h['name'], why=h['why'], time=h['time'], etime=h.get('etime'), start_day=h['start_day'], days=st['days'], hours=st['hours'], since=st['since'], best=st['best'], beaten=st['beaten'],
                 relapses=st['relapses'], triggers=st['triggers'][:6], events=st['events'][:20],
                 streaks=[dict(days=x['days'], start=x['start'], end=x['end'], current=x['current']) for x in M.quit_streaks(c, h)[:12]],
                 plan=json.loads(M.setting(c, 'plan') or '[]'))
@@ -95,7 +95,7 @@ def home(c, a):
     empty = not c.execute('SELECT 1 FROM tasks LIMIT 1').fetchone() and not c.execute('SELECT 1 FROM habits LIMIT 1').fetchone()
     return dict(empty=empty, total=s['total'], done=s['done'], timeline=[x for x in tl if x['kind'] not in ('quit', 'focus')], routines=_routines(c), top3=[dict(id=x['id'], title=x['title'], done=bool(x['done_at'])) for x in M.top3(c)],
                 sleep=_sleep_row(c, sl[0]) if sl else None, quit=[dict(id=h['id'], name=h['name'], days=M.quit_stats(c, h)['days'], best=M.quit_stats(c, h)['best']) for h in q],
-                week=week, colors=M.ROUTINE_COLORS, areas=[dict(id=x['id'], name=x['name'], color=x['color']) for x in M.areas(c)])
+                colors=M.ROUTINE_COLORS, areas=[dict(id=x['id'], name=x['name'], color=x['color']) for x in M.areas(c)])
 
 
 def tasks(c, a):
@@ -112,7 +112,7 @@ def tasks(c, a):
 
 def task_save(c, a):
     t = a['task']; old = M.task(c, int(t['id'])) if t.get('id') else {}
-    v = dict(old or {}); v.update({k: t.get(k) for k in ('title', 'area_id', 'day', 'time', 'minutes', 'note', 'remind') if k in t})
+    v = dict(old or {}); v.update({k: t.get(k) for k in ('title', 'area_id', 'day', 'time', 'minutes', 'note', 'remind', 'why') if k in t})
     if 'repeat' in t: v['repeat'] = t['repeat']
     if 'repeat_end' in t: v['repeat_end'] = t['repeat_end']
     v.setdefault('status', 'todo'); v['minutes'] = int(v.get('minutes') or 30); v['remind'] = int(v.get('remind') if v.get('remind') is not None else -1)
@@ -151,19 +151,20 @@ def calendar_move(c, a):
 
 
 def checkins(c, a):
-    t = M.today(); e = t; s = e - timedelta(days=6)
+    t = _d(a.get('day')) if a.get('day') else M.today(); t = min(t, M.today()); e = t; s = e - timedelta(days=6)
     allh = [h for h in M.habits(c, 'build')]
     rows = M.grid(c, allh, s, e) if allh else []
     by = {r['habit']['id']: r for r in rows}; logs = {r['habit_id']: r['state'] for r in c.execute('SELECT habit_id, state FROM habit_log WHERE day=?', (M.iso(t),))}
     out = {}
+    allh = [h for h in allh if any(p['start'] <= M.iso(t) and (not p['end'] or p['end'] >= M.iso(t)) for p in h['periods'])] if a.get('day') else allh
     for h in allh:
         st = M.stats(c, h, 30)
         out.setdefault(h['routine'] or '', []).append(dict(id=h['id'], name=h['name'], time=h['time'], etime=h.get('etime'), due=M.due_on(h, t), state=logs.get(h['id']),
                                                           late=bool(M.due_on(h, t) and not logs.get(h['id']) and M.time_passed(h, t)),
                                                           history=M.period_lines(h) if len(h['periods']) > 1 else [],
                                                           week=[[M.iso(d), x] for d, x in by[h['id']]['cells']], streak=st['streak'], pct=st['pct'],
-                                                          routine=h['routine'], area_id=h['area_id'], days=h['days'], remind=h['remind']))
-    return dict(groups=out, order=M.ROUTINES, colors=M.ROUTINE_COLORS, changes=M.habit_changes(c)[:12],
+                                                          routine=h['routine'], area_id=h['area_id'], days=h['days'], remind=h['remind'], why=h.get('why') or ''))
+    return dict(day=t, groups=out, order=M.ROUTINES, colors=M.ROUTINE_COLORS, changes=M.habit_changes(c)[:12],
                 stopped=[dict(id=h['id'], name=h['name'], routine=h['routine'], last=(h['periods'][-1]['end'] if h['periods'] else None)) for h in M.habits(c, 'build', archived=True)])
 
 
@@ -306,7 +307,8 @@ OPS = {
                                                                             ('sleep_goal', 'goal')) if a.get(v) is not None],
     'quit': lambda c, a: [_quit(c, h) for h in M.habits(c, 'quit')],
     'quit_save': lambda c, a: M.save_habit(c, dict(M.habit(c, int(a['id'])) if a.get('id') else {}, kind='quit', name=a['name'], why=a.get('why', ''), routine='',
-                                                   days=list(range(7)), time=a.get('time') or '00:15', remind=0, start_day=a.get('start_day') or M.iso(M.today()))),
+                                                   days=list(range(7)), time=a.get('time') or (M.habit(c, int(a['id']))['time'] if a.get('id') else '22:00'),
+                                                   etime=a.get('etime') or None, remind=0, start_day=a.get('start_day') or (M.habit(c, int(a['id']))['start_day'] if a.get('id') else M.iso(M.today())))),
     'quit_log': lambda c, a: M.log_quit(c, int(a['id']), a['kind'], a.get('trigger', ''), a.get('helped', ''), a.get('note', ''),
                                         datetime.fromisoformat(a['when'][:16]) if a.get('when') else None),
     'nudges': lambda c, a: M.nudges(c),
@@ -323,10 +325,112 @@ OPS = {
 }
 
 
+# ───────────────────────── 10.43 (like the desktop): tasks by day, Notes, Inspo ─────────────────────────
+def tasks_days(c, a):
+    """tasks of the days start..end (done ones stay), the ones with no date, and the boards with how many open tasks"""
+    s, e = _d(a.get('start')), _d(a.get('end') or a.get('start')); area = int(a['area']) if a.get('area') else None
+    ar = {x['id']: x for x in M.areas(c, True)}; now = M.now()
+    def row(x):
+        late = False
+        if not x['done_at'] and x['day']:
+            if x['time']:
+                st = datetime.fromisoformat(f"{x['day']}T{x['time']}"); late = st + timedelta(minutes=int(x['minutes'] or 30)) < now
+            else: late = x['day'] < M.iso(M.today())
+        b = ar.get(x['area_id']) or {}
+        return dict(id=x['id'], title=x['title'], area_id=x['area_id'], area=b.get('name'), color=b.get('color'), day=x['day'], time=x['time'], minutes=x['minutes'],
+                    note=x['note'], why=x.get('why') or '', remind=x['remind'], done=bool(x['done_at']), done_at=x['done_at'], late=late)
+    allt = M.tasks(c)
+    rows = [row(x) for x in allt if x['day'] and M.iso(s) <= x['day'] <= M.iso(e) and (area is None or x['area_id'] == area)]
+    rows.sort(key=lambda r: (r['day'], r['time'] or '99'))
+    nod = [row(x) for x in allt if not x['day'] and not x['done_at'] and (area is None or x['area_id'] == area)]
+    cnt = {}
+    for x in allt:
+        if not x['done_at']: cnt[x['area_id']] = cnt.get(x['area_id'], 0) + 1
+    boards = [dict(id=b['id'], name=b['name'], color=b['color'], open=cnt.get(b['id'], 0)) for b in M.areas(c)]
+    return dict(rows=rows, nodate=nod, boards=boards, all_open=sum(cnt.values()))
+
+
+def notes_view(c, a):
+    tags = M.note_tags(c); cols = M.note_tag_colors(c)
+    ns = M.notes(c, a.get('tag') or None, q=a.get('q') or '')
+    return dict(tags=[dict(name=t, color=cols[t]) for t in tags], palette=M.STICKY, notes=ns, memory=M.memory_of_day(c))
+
+
+def notes_save(c, a):
+    n = a['note']; old = next((x for x in M.notes(c) if x['id'] == int(n['id'])), {}) if n.get('id') else {}
+    v = dict(old); v.update(n)
+    if not ((v.get('title') or '').strip() or (v.get('content') or '').strip()): raise ValueError('Write something first.')
+    return M.save_note(c, v)
+
+
+def _spark(c):
+    """one thing at a time from your notes, goals and dreams (pictures stay on the PC); a new one every few hours, like the desktop"""
+    import time as _t
+    pool = [x for x in M.spark_pool(c) if x['spark'] != 'card' or x['kind'] == 'quote']
+    hrs = M.spark_hours(c); left = int(hrs * 3600 - (_t.time() % (hrs * 3600)))
+    if not pool: return dict(item=None, hours=hrs, left=left)
+    pool.sort(key=lambda x: (x['spark'], x['id']))
+    import random as _r
+    return dict(item=_r.Random(M.spark_slot(c) * 7919 + len(pool)).choice(pool), hours=hrs, left=left)
+
+
+def inspo_view(c, a):
+    return dict(goals=M.goals(c, 'goal'), dreams=M.goals(c, 'dream'), notes=[x for x in M.inspo_items(c) if x['kind'] == 'quote'],
+                sections=M.inspo_sections(c), spark=_spark(c), view=M.setting(c, 'goal_view') or 'list', year=M.today().year)
+
+
+def goal_save(c, a):
+    g = a['goal']; old = dict(c.execute('SELECT * FROM goals WHERE id=?', (int(g['id']),)).fetchone() or {}) if g.get('id') else {}
+    v = dict(old); v.update(g)
+    if not (v.get('title') or '').strip(): raise ValueError('Write the goal first.')
+    return M.save_goal(c, v)
+
+
+OPS2 = {
+    'tasks_days': tasks_days,
+    'notes': notes_view, 'notes_save': notes_save,
+    'notes_delete': lambda c, a: M.delete_note(c, int(a['id'])) or True,
+    'notes_archive': lambda c, a: M.archive_note(c, int(a['id'])) or True,
+    'tag_add': lambda c, a: M.add_note_tag(c, a['name']),
+    'tag_rename': lambda c, a: M.rename_note_tag(c, a['old'], a['new']) or (_ for _ in ()).throw(ValueError('That name is already used.')),
+    'tag_delete': lambda c, a: M.delete_note_tag(c, a['name']),
+    'tag_color': lambda c, a: M.set_note_tag_color(c, a['name'], a['color']) or True,
+    'inspo': inspo_view, 'goal_save': goal_save,
+    'goal_delete': lambda c, a: M.delete_goal(c, int(a['id'])) or True,
+    'dream_to_goal': lambda c, a: M.dream_to_goal(c, int(a['id'])) or True,
+    'goal_view': lambda c, a: M.set_setting(c, 'goal_view', 'pics' if a.get('view') == 'pics' else 'list') or True,
+    'spark_hours': lambda c, a: M.set_setting(c, 'inspo_spark_hours', str(int(a['hours']))) or True,
+    'spark_next': lambda c, a: M.set_setting(c, 'inspo_spark_skip', str(int(M.setting(c, 'inspo_spark_skip') or 0) + 1)) or True,
+    'card_spark': lambda c, a: M.update_inspo(c, int(a['id']), no_spark=1 if a.get('off', True) else 0) or True,
+    'note_delete': lambda c, a: M.remove_inspo(c, int(a['id'])) or True,
+    'section_rename': lambda c, a: M.rename_inspo_section(c, a['old'], a['new']) or (_ for _ in ()).throw(ValueError('That name is already used.')),
+    'section_delete': lambda c, a: M.delete_inspo_section(c, a['name'], a['move_to']),
+}
+
+
+GOAL_OPS = {'inspo', 'goal_save', 'goal_done', 'goal_delete', 'dream_to_goal'}
+
+
 def call(op, args):
-    fn = OPS.get(op)
+    if op == 'card_page':                                               # a note card becomes a page in Docs › Inspo › Inspo cards
+        import docs_web; return docs_web.card_page(int(args['id']))
+    fn = OPS2.get(op) or OPS.get(op)
     if not fn: raise ValueError(f'Unknown: {op}')
-    return _j(run(lambda c: fn(c, args or {})))
+    out = _j(run(lambda c: fn(c, args or {})))
+    if op == 'inspo':
+        try:
+            import docs_web; docs_web.goal_pages(); out = _j(run(lambda c: fn(c, args or {})))
+            th = docs_web.thumbs([g.get('page_id') for g in out['goals'] if g.get('page_id')])
+            for g in out['goals']: g['pic'] = th.get(g.get('page_id') or '')
+        except Exception:
+            import logging; logging.exception('docs goals')
+        return out
+    if op in GOAL_OPS:
+        try:
+            import docs_web; docs_web.goal_pages()                       # goals are a table in Docs too (each one a page)
+        except Exception:
+            import logging; logging.exception('docs goals')
+    return out
 
 
 # ───────────────────────── one-time copy of the desktop's myday.db ─────────────────────────
@@ -363,6 +467,7 @@ def import_db(b64, replace=False):
 # ───────────────────────── reminders to the phone (the cron service calls tick every minute) ─────────────────────────
 def tick():
     import push
+    push.seen_tick()
     at = M.now(); items = []
 
     def go(c):

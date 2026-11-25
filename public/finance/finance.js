@@ -191,7 +191,7 @@
   function segbar(rows) { const tot = rows.reduce((a, r) => a + r[1], 0) || 1; return h('div', { class: 'segbar' }, rows.map(([n, v, c]) => h('i', { style: { width: (v / tot * 100) + '%', background: c }, title: `${n}: ${W(v)}` }))); }
 
   // ── navigation ──
-  const NAV = [['overview', 'Overview', 'home'], ['transactions', 'Transactions', 'list'], ['transfers', 'Transfers', 'swap'], ['accounts', 'Accounts', 'wallet'], ['goals', 'Goals', 'target'],
+  const NAV = [['overview', 'Overview', 'home'], ['transactions', 'Transactions', 'list'], ['transfers', 'Transfers', 'swap'], ['accounts', 'Accounts', 'wallet'], ['goals', 'Wishlist', 'target'],
     ['subscriptions', 'Subscriptions', 'repeat'], ['assets', 'Assets', 'box'], ['reports', 'Reports', 'chart'], ['settings', 'Settings', 'gear']];
   const ST = { month: null, search: '', account: '', kind: '', category: '', where: 'expense', goalFilter: 'all', sel: new Set(), tfMonth: null, repMonth: null, assetSel: null, showArch: false };
   const cur = () => (location.hash.match(/^#(\w+)/) || [])[1] || 'overview';
@@ -238,7 +238,7 @@
       { k: 'title', label: 'Title', ph: 'e.g. Savings for the month' },
       { k: 'from', label: 'From', type: 'select', options: accs, half: true }, { k: 'to', label: 'To', type: 'select', options: accs, half: true },
       { k: 'amount_out', label: 'Amount sent', type: 'amount', half: true }, { k: 'amount_in', label: 'Amount received', type: 'amount', half: true, hint: 'Only for a different currency' },
-      { k: 'fee', label: 'Fee', type: 'amount', ph: '0', half: true }, { k: 'goal', label: 'Goal (optional)', type: 'select', options: META.goals.map(g => [g.id, g.name]), blank: 'No goal', half: true },
+      { k: 'fee', label: 'Fee', type: 'amount', ph: '0', half: true }, { k: 'goal', label: 'Wishlist item (optional)', type: 'select', options: META.goals.map(g => [g.id, g.name]), blank: 'Not for a wishlist item', half: true },
       { k: 'date', label: 'Date', type: 'date', half: true }, { k: 'time', label: 'Time (optional)', type: 'time', half: true },
       { k: 'note', label: 'Note', type: 'textarea' }],
       { title: t.title, from: t.from_account_id || (accs[0] || [])[0], to: t.to_account_id || (accs[1] || [])[0], amount_out: t.id ? plain(t.amount_out) : '', amount_in: t.id && t.amount_in !== t.amount_out ? plain(t.amount_in) : '',
@@ -273,7 +273,7 @@
     const el = h('div', {});
     if (d.empty) {
       el.append(head('Overview', null), card(null, null, h('div', { class: 'empty', style: { padding: '30px 10px' } }, h('h2', {}, 'Welcome to Finance'),
-        h('p', {}, 'Your money in one calm place: accounts, daily income and expenses, moving money, goals, subscriptions and the things you own.'),
+        h('p', {}, 'Your money in one calm place: accounts, daily income and expenses, moving money, a wishlist of things to buy, subscriptions and the things you own.'),
         h('div', { class: 'row', style: { justifyContent: 'center', marginTop: '16px', flexWrap: 'wrap' } }, btn('Add my first account', 'primary', () => accDialog(), 'plus'),
           h('a', { class: 'btn', href: '/#/settings', target: '_top' }, 'Import from the desktop app')))));
       return el;
@@ -340,7 +340,7 @@
         tot ? [h('div', { class: 'big' }, W(tot)), segbar(d.where), d.where.map(([n, v, c]) => h('div', { class: 'li', style: { padding: '5px 0' } }, dot(c), h('div', { class: 'm' }, n), h('span', { class: 'muted' }, W(v)), h('b', { style: { width: '46px', textAlign: 'right' } }, Math.round(v * 100 / tot) + '%')))]
           : h('p', { class: 'muted' }, 'Nothing yet this month.')));
     }
-    if (!hidden.has('goals')) cards.push(card('My goals', btn('All', 'ghost sm', () => location.hash = '#goals'), d.goals.length ? d.goals.map((g, i) => h('div', { class: 'li' },
+    if (!hidden.has('goals')) cards.push(card('Wishlist', btn('All', 'ghost sm', () => location.hash = '#goals'), d.goals.length ? d.goals.map((g, i) => h('div', { class: 'li' },
       h('div', { class: 'av', style: { background: META.cat_colors[i % META.cat_colors.length] } }, g.name[0].toUpperCase()), h('div', { class: 'm' }, h('div', { class: 't' }, g.name), h('div', { class: 'faint' }, `${fmt(g.saved, g.currency, { whole: true })} of ${fmt(g.target, g.currency, { whole: true })}`), h('div', { style: { marginTop: '5px' } }, bar(g.progress))),
       h('b', {}, Math.round(g.progress * 100) + '%'))) : [h('p', { class: 'muted' }, 'No goals yet. Add something you are saving for — a new phone, a camera, a trip.'), btn('Add a goal', 'soft sm', () => goalDialog(), 'plus')]));
     if (!hidden.has('subs')) cards.push(card('Subscriptions', btn('All', 'ghost sm', () => location.hash = '#subscriptions'), d.subs_next.length || d.subs_monthly ? [h('div', { class: 'big', style: { fontSize: '20px' } }, W(d.subs_monthly) + ' a month'),
@@ -358,7 +358,7 @@
     return el;
   }
   function customize(at, hidden) {
-    const CARDS = [['flow', 'Cash flow, health and emergency fund'], ['where', 'Where the money went'], ['recent', 'Recent activity'], ['depr', 'Depreciation'], ['fund', 'Replacement fund'], ['subs', 'Subscriptions'], ['goals', 'Goals'], ['assets', 'Things you own']];
+    const CARDS = [['flow', 'Cash flow, health and emergency fund'], ['where', 'Where the money went'], ['recent', 'Recent activity'], ['depr', 'Depreciation'], ['fund', 'Replacement fund'], ['subs', 'Subscriptions'], ['goals', 'Wishlist'], ['assets', 'Things you own']];
     menu(at, CARDS.map(([k, t]) => ({ t: (hidden.has(k) ? '☐  ' : '☑  ') + t, fn: () => { hidden.has(k) ? hidden.delete(k) : hidden.add(k); act('settings_set', { overview_hidden: [...hidden].join(',') }); } })));
   }
   function setLimit() {
@@ -455,7 +455,7 @@
   // ══════════════ Goals ══════════════
   function goalDialog(g) {
     g = g || {};
-    form(g.id ? 'Edit goal' : 'New goal', [{ k: 'name', label: 'What are you saving for?', ph: 'e.g. New phone' }, { k: 'target', label: 'Amount needed', type: 'amount', half: true },
+    form(g.id ? 'Edit wishlist item' : 'Add to wishlist', [{ k: 'name', label: 'What are you saving for?', ph: 'e.g. New phone' }, { k: 'target', label: 'Amount needed', type: 'amount', half: true },
       { k: 'initial', label: 'Already saved', type: 'amount', ph: '0', half: true }, { k: 'due', label: 'By when (optional)', type: 'date', half: true },
       g.id ? null : { k: 'currency', label: 'Currency', ph: B(), half: true }, { k: 'note', label: 'Note', type: 'textarea' }],
       { name: g.name, target: g.id ? plain(g.target) : '', initial: g.initial ? plain(g.initial) : '', due: g.due, note: g.note }, async (v) => { await api('goal_save', { ...v, id: g.id }); toast('Saved'); await reload(); });
@@ -479,9 +479,9 @@
     const d = await api('goals'); META = d.meta;
     const cnt = { open: 0, done: 0, failed: 0 }; d.rows.forEach(g => cnt[g.state]++);
     const shown = d.rows.filter(g => ST.goalFilter === 'all' || g.state === ST.goalFilter);
-    const el = h('div', {}, head('Goals', `${cnt.open} in progress · ${cnt.done} completed · ${cnt.failed} failed`, btn('New goal', 'primary', () => goalDialog(), 'plus')),
+    const el = h('div', {}, head('Wishlist', `${cnt.open} in progress · ${cnt.done} completed · ${cnt.failed} failed`, btn('Add item', 'primary', () => goalDialog(), 'plus')),
       h('div', { class: 'toolbar' }, seg([['all', 'All'], ['open', 'In progress'], ['done', 'Completed'], ['failed', 'Failed']], ST.goalFilter, (v) => { ST.goalFilter = v; reload(); })));
-    if (!shown.length) { el.append(card(null, null, h('div', { class: 'empty' }, h('h2', {}, 'No goals here'), h('p', {}, 'Add something you are saving for — a camera, a trip, a new PC.')))); return el; }
+    if (!shown.length) { el.append(card(null, null, h('div', { class: 'empty' }, h('h2', {}, 'Nothing on your wishlist here'), h('p', {}, 'Add something you are saving to buy — a camera, a trip, a new PC.')))); return el; }
     el.append(h('div', { class: 'g gauto rise' }, shown.map(g => {
       const st = { done: chip('Completed', 'green'), failed: chip('Failed', 'red'), open: chip('In progress', 'blue') }[g.state];
       const more = btn('', 'ghost sm icon', (e) => { e.stopPropagation(); menu(e.currentTarget, [{ t: 'History', fn: () => goalHistory(g) }, { t: 'Edit', fn: () => goalDialog(g) },

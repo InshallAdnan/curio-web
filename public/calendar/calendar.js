@@ -72,7 +72,9 @@
     const start = (isPage || isMd) ? parse(e.start) : parse(e.date);
     let end = e.end ? parse(e.end) : null;
     if (!end) end = allDay ? start : new Date(start.getTime() + 3600e3);
-    const ink = (isPage || isMd) ? e.ink : (SRC_INK[e.source] || '#64748b');
+    const cc = store('cal_colors') || {};                                                // 10.43: a colour you picked for this calendar
+    let ink = (isPage || isMd) ? e.ink : (cc['fin:' + e.source] || SRC_INK[e.source] || '#64748b');
+    if (isMd && cc['md:' + (e.mgroup || '')]) ink = cc['md:' + e.mgroup];
     const bg = dark() ? ink + '33' : (isPage ? e.color : isMd ? ink + '22' : ink + '14');
     const movable = isPage || (isMd && !e.readonly) || ['income', 'expense', 'transfer'].includes(e.source);
     const past = e.source !== 'daily_total' && (allDay ? startOfDay(end) < startOfDay(new Date()) : end <= new Date());   // over: shown lighter, like Notion
@@ -130,23 +132,26 @@
       h('button', { onclick: () => { S.miniMonth = new Date(mm.getFullYear(), mm.getMonth() + 1, 1); renderLeft(); } }, '›')),
       h('table', {}, h('tr', {}, h('th'), DOW.map(d => h('th', {}, d[0]))), rows));
     const D = S.data || { sources: {}, labels: {}, calendars: [], inks: [] };
-    const srcRows = Object.keys(D.labels).map(k => h('div', { class: 'src' + (D.sources[k] ? ' on' : ''), style: { '--c': SRC_INK[k] }, onclick: async () => { await cal('set_source', { key: k, on: !D.sources[k] }).catch(e => toast(e.message)); load(); } },
-      h('span', { class: 'box' }), h('span', { class: 'nm' }, D.labels[k])));
+    const CC = store('cal_colors') || {};
+    const srcRows = Object.keys(D.labels).map(k => h('div', { class: 'src' + (D.sources[k] ? ' on' : ''), style: { '--c': CC['fin:' + k] || SRC_INK[k] }, onclick: async (e) => { if (e.target.closest('.dots')) return; await cal('set_source', { key: k, on: !D.sources[k] }).catch(x => toast(x.message)); load(); } },
+      h('span', { class: 'box' }), h('span', { class: 'nm' }, D.labels[k]), h('button', { class: 'dots', title: 'Colour', onclick: (e) => colourMenu(e.currentTarget, 'fin:' + k, CC['fin:' + k] || SRC_INK[k]) }, '⋯')));
     const pageRows = D.calendars.map(c => h('div', { class: 'src' + (c.on ? ' on' : ''), style: { '--c': D.inks[c.color % D.inks.length] }, title: `${c.title} · date: ${c.prop_name}`,
       onclick: async (e) => { if (e.target.closest('.dots')) return; await cal('set_page', { db: c.id, on: !c.on }).catch(x => toast(x.message)); load(); } },
       h('span', { class: 'box' }), h('span', { class: 'nm' }, (c.icon && c.icon.length <= 2 ? c.icon + '  ' : '') + c.title),
       h('button', { class: 'dots', title: 'Options', onclick: (e) => pageMenu(e.currentTarget, c) }, '⋯')));
     const off = store('trk_off') || {};
-    const trkRows = (D.tracker || []).map(t => h('div', { class: 'src' + (off[t.key] ? '' : ' on'), style: { '--c': t.color }, title: 'Click to show / hide',
-      onclick: () => { const o = store('trk_off') || {}; o[t.key] = !o[t.key]; store('trk_off', o); load(); } }, h('span', { class: 'box' }), h('span', { class: 'nm' }, t.name)));
+    const trkRows = (D.tracker || []).map(t => { const col = String(t.key).startsWith('area:') ? t.color : (CC['md:' + t.key] || t.color);
+      return h('div', { class: 'src' + (off[t.key] ? '' : ' on'), style: { '--c': col }, title: 'Click to show / hide · ⋯ = colour',
+        onclick: (e) => { if (e.target.closest('.dots')) return; const o = store('trk_off') || {}; o[t.key] = !o[t.key]; store('trk_off', o); load(); } }, h('span', { class: 'box' }), h('span', { class: 'nm' }, t.name),
+        h('button', { class: 'dots', title: 'Colour', onclick: (e) => colourMenu(e.currentTarget, String(t.key).startsWith('area:') ? t.key : 'md:' + t.key, col, t.name) }, '⋯')); });
     put(L, mini, h('div', { class: 'sec' }, h('span', {}, 'Finance')), srcRows,
-      h('div', { class: 'sec' }, h('span', {}, 'Pages databases'), h('button', { title: 'Add a Pages database as a calendar', onclick: openPicker }, '+')),
-      pageRows.length ? pageRows : h('div', { class: 'hint' }, 'No Pages database here yet.\nClick + to pick one from Pages, or paste\nits link (view menu › Copy link to view).'),
+      h('div', { class: 'sec' }, h('span', {}, 'Docs databases'), h('button', { title: 'Add a Docs database as a calendar', onclick: openPicker }, '+')),
+      pageRows.length ? pageRows : h('div', { class: 'hint' }, 'No Docs database here yet.\nClick + to pick one from Docs, or paste\nits link (view menu › Copy link to view).'),
       trkRows.length ? [h('div', { class: 'sec' }, h('span', {}, 'Tracker')), trkRows] : null);
   }
   function pageMenu(at, c) {
     const D = S.data, names = ['Blue', 'Pink', 'Green', 'Yellow', 'Purple', 'Teal', 'Orange', 'Grey'];
-    menu(at, [['↗  Open database in Pages', '', () => goPages(c.parent || c.id)],
+    menu(at, [['↗  Open database in Docs', '', () => goPages(c.parent || c.id)],
       ...(c.date_props.length > 1 ? ['-', { lbl: 'Use date property' }, ...c.date_props.map(p => [(p.id === c.prop_id ? '✓ ' : '   ') + p.name, '', async () => { await cal('set_page', { db: c.id, prop: p.id }); load(); }])] : []),
       '-', { lbl: 'Colour' }, ...names.map((n, i) => [(i === c.color ? '✓ ' : '   ') + n, '', async () => { await cal('set_page', { db: c.id, color: i }); load(); }]),
       '-', ['Show only this calendar', '', async () => { await cal('solo', { db: c.id }); load(); }],
@@ -349,7 +354,7 @@
         onblur: async () => { if (inp.value.trim() !== e.title) { await cal('rename', { record_id: e.record_id, title: inp.value.trim() }).catch(x => toast(x.message)); load(); } } });
       const props = h('div', {}, h('div', { class: 'short' }, '…'));
       put(R, ...head, inp, h('div', { class: 'dt-row' }, h('span', { class: 'k' }, 'When'), h('span', {}, when)), props,
-        h('button', { class: 'dt-btn', onclick: () => goPages(e.record_id) }, '↗  Open in Pages'),
+        h('button', { class: 'dt-btn', onclick: () => goPages(e.record_id) }, '↗  Open in Docs'),
         h('button', { class: 'dt-btn danger', onclick: async () => { await cal('clear_date', { record_id: e.record_id, prop_id: e.prop_id }).catch(x => toast(x.message)); S.sel = null; load(); } }, 'Remove from calendar (clear the date)'));
       const rows = await cal('details', { db: e.db_id, record_id: e.record_id, prop_id: e.prop_id }).catch(() => []);
       if (S.sel === e.id) put(props, ...rows.filter(r => r[1]).map(([k, v]) => h('div', { class: 'dt-row' }, h('span', { class: 'k' }, k), h('span', {}, v))));
@@ -368,6 +373,21 @@
   }
   // ── Tracker items: their properties, tick done, change the board, delete ──
   const trk = (op, a) => api('/api/tracker', op, a);
+  // 10.43: change the colour of a calendar. A Tracker board changes in the Tracker too; the others are kept in this browser.
+  function colourMenu(at, key, cur, name) {
+    const r = at.getBoundingClientRect(); document.querySelectorAll('.cm-pop').forEach(x => x.remove());
+    const pick = h('input', { type: 'color', value: cur || '#888888', style: { width: '100%', height: '34px', border: '0', padding: '0', background: 'none', cursor: 'pointer' } });
+    const save = async (hex) => {
+      if (key.startsWith('area:')) { try { await trk('area_save', { id: +key.slice(5), name, color: hex }); } catch (e) { toast(e.message); } }
+      else { const o = store('cal_colors') || {}; if (hex) o[key] = hex; else delete o[key]; store('cal_colors', o); }
+      pop.remove(); load();
+    };
+    const pop = h('div', { class: 'cm-pop', style: { position: 'fixed', left: Math.min(r.left, innerWidth - 220) + 'px', top: (r.bottom + 4) + 'px', zIndex: 9999, width: '200px', padding: '10px', borderRadius: '10px',
+      background: 'var(--card, #fff)', border: '1px solid var(--line, #ddd)', boxShadow: '0 8px 24px rgba(0,0,0,.15)' } }, h('div', { style: { fontSize: '12px', marginBottom: '6px', color: 'var(--muted, #777)' } }, 'Colour'), pick,
+      h('div', { style: { display: 'flex', gap: '6px', marginTop: '8px' } }, h('button', { class: 'dt-btn', onclick: () => save(pick.value) }, 'Save'),
+        key.startsWith('area:') ? null : h('button', { class: 'dt-btn', onclick: () => save(null) }, 'Usual'), h('button', { class: 'dt-btn', onclick: () => pop.remove() }, 'Cancel')));
+    document.body.append(pop);
+  }
   const row = (k, v) => h('div', { class: 'dt-row' }, h('span', { class: 'k' }, k), typeof v === 'string' ? h('span', {}, v) : v);
   async function trackerDetails(R, e, when) {
     const head = h('div', { class: 'dt-label' }, h('span', { style: { display: 'inline-block', width: '9px', height: '9px', borderRadius: '3px', background: e.ink, marginRight: '6px' } }), e.calendar || 'Tracker');
@@ -449,11 +469,11 @@
   // ── Notion-Calendar-style “Add database” picker ──
   async function openPicker() {
     let data = await cal('databases', {}).catch(x => { toast(x.message); return null; }); if (!data) return;
-    const q = h('input', { placeholder: 'Add Pages database or paste its link…' });
+    const q = h('input', { placeholder: 'Add a Docs database or paste its link…' });
     const list = h('div', { class: 'list' }); let rows = [], cur = 0, tm;
     const sc = h('div', { class: 'scrim', onclick: () => close() });
-    const pk = h('div', { class: 'picker' }, h('div', { class: 'chipws' }, `${(data.me || 'Your')} Pages`), h('div', { class: 'q' }, ic('search'), q), list,
-      h('div', { class: 'foot', html: 'Pages databases with a Date property appear here. Not in the list? In Pages open the view menu (▾ next to the view name) › <b>Copy link to view</b> and paste it above.' }));
+    const pk = h('div', { class: 'picker' }, h('div', { class: 'chipws' }, `${(data.me || 'Your')} Docs`), h('div', { class: 'q' }, ic('search'), q), list,
+      h('div', { class: 'foot', html: 'Docs databases with a Date property appear here. Not in the list? In Docs open the view menu (▾ next to the view name) › <b>Copy link to view</b> and paste it above.' }));
     const close = () => { sc.remove(); pk.remove(); };
     const fill = () => {
       const t = q.value.trim(), tl = t.toLowerCase(); const shown = new Set(data.shown); put(list, ); rows = [];

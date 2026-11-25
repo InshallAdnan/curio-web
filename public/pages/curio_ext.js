@@ -973,6 +973,57 @@
         } }];
   };
 
+  // ── 10.43: Docs (was “Pages”) — a small path on top, no “…'s Pages” switcher; embed=1 = a page opened inside the Tracker ──
+  const EMBED = /[?&]embed=1\b/.test(location.search);
+  (function () {
+    const st = document.createElement('style');
+    st.textContent = '.cx-crumb{display:flex;align-items:center;gap:4px;font-size:12.5px;color:hsl(var(--muted-foreground));white-space:nowrap;overflow:hidden;min-width:0;flex:0 1 auto;margin-right:6px}' +
+      '.cx-crumb a{color:inherit;text-decoration:none;padding:2px 4px;border-radius:4px;overflow:hidden;text-overflow:ellipsis;max-width:180px}.cx-crumb a:hover{background:hsl(var(--accent));color:hsl(var(--foreground))}' +
+      '.cx-crumb .sep{opacity:.5;flex:none} .cx-crumb > a:first-child{flex:none;overflow:visible}' +
+      (EMBED ? 'aside{display:none!important} aside + div{left:0!important;width:100%!important} .cx-side{display:none!important}' : '');
+    document.head.append(st);
+  })();
+  function hideSwitcher() {
+    const aside = $('aside'); if (!aside) return;
+    for (const b of $$('[role=button]', aside)) {
+      if (b.__cxHid) continue;
+      if (/'s Pages\s*$/.test((b.innerText || '').trim())) { b.style.display = 'none'; b.__cxHid = true; }
+    }
+  }
+  let CRUMB = { id: null, list: [] };
+  async function loadCrumb(id) {
+    const out = []; let cur = await core('get', id).catch(() => null); let n = 0;
+    while (cur && n++ < 8) {
+      let pid = cur.parentId;
+      if (!pid && cur.db) {
+        const d = await core('db_get', cur.db).catch(() => null);
+        if (d && d.db) { out.unshift({ title: d.db.title || 'Table', id: d.db.parent, db: true }); pid = d.db.parent; }
+      }
+      if (!pid) break;
+      const p = await core('get', pid).catch(() => null); if (!p) break;
+      if (!out.length || out[0].db || out[0].id !== p.id) out.unshift({ title: p.title || 'Untitled', id: p.id, icon: p.icon });
+      cur = p;
+    }
+    CRUMB = { id, list: out }; renderCrumb();
+  }
+  function renderCrumb() {
+    let nav = navEl(), pad = false;
+    if (!nav) {                                                   // a database row has no top bar: put the path in the empty strip on top
+      const a = $('aside'), strip = a && a.nextElementSibling;
+      if (!strip || [...strip.children].some(x => x.id !== 'cx-crumb')) return;
+      nav = strip; pad = true;
+    }
+    let el = $('#cx-crumb');
+    if (!el || el.parentElement !== nav) { el && el.remove(); el = h('div', { id: 'cx-crumb', class: 'cx-crumb' }); nav.prepend(el); }
+    el.style.padding = pad ? '12px 16px' : '';
+    const sig = CRUMB.id + '|' + CRUMB.list.map(x => x.title).join('/');
+    if (el.__sig === sig) return; el.__sig = sig;
+    const kids = [h('a', { href: EMBED ? 'javascript:void 0' : '#/documents' }, 'Docs')];
+    for (const x of CRUMB.list) kids.push(h('span', { class: 'sep' }, '/'), x.id ? h('a', { href: '#/documents/' + x.id, title: x.title }, (x.icon ? x.icon + ' ' : '') + x.title) : h('span', {}, x.title));
+    kids.push(h('span', { class: 'sep' }, '/'));
+    el.replaceChildren(...kids);
+  }
+
   // ── wiring ──────────────────────────────────────────────────────────────────────────
   let lastDoc = null, lastEditor = null, pending = false;
   function tick() {
@@ -980,8 +1031,9 @@
     const id = docId();
     if (id !== lastDoc) {
       lastDoc = id; META = null; showComments = false;
-      if (id) { ext('visit', id).then(loadSide).catch(() => {}); loadMeta(); } else { renderToc(); renderLockBar(); renderHead(); }
+      if (id) { ext('visit', id).then(loadSide).catch(() => {}); loadMeta(); loadCrumb(id).catch(() => {}); } else { renderToc(); renderLockBar(); renderHead(); }
     }
+    hideSwitcher(); if (id) renderCrumb();
     if (bn() !== lastEditor) { lastEditor = bn(); applyAppearance(); }
     renderHead(); renderComments();
     if (!$('#cx-side') || $('#cx-side').previousElementSibling !== sideAnchor()) renderSide();
