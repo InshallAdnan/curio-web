@@ -46,7 +46,7 @@
     ['Media', [['creators', 'Creators', 'users'], ['youtube', 'YouTube', 'play'], ['songs', 'Songs', 'music']]],
     ['AI', [['ask', 'Ask AI · ChatGPT', 'bot'], ['notebooks', 'Notebooks', 'book']]],
     ['Workspace', [['tracker', 'Tracker', 'check'], ['pages', 'Docs', 'page'], ['finance', 'Finance', 'wallet'], ['calendar', 'Calendar', 'cal']]],
-    ['Platforms', [['instagram', 'Instagram', 'insta'], ['pinterest', 'Pinterest', 'pin'], ['ytsync', 'YouTube', 'play'], ['facebook', 'Facebook', 'fb']]],
+    ['Platforms', [['organize', 'Organize', 'grid'], ['instagram', 'Instagram', 'insta'], ['pinterest', 'Pinterest', 'pin'], ['ytsync', 'YouTube', 'play'], ['facebook', 'Facebook', 'fb']]],
   ];
   const TITLE = Object.fromEntries(NAV.flatMap(([, items]) => items.map(([k, t]) => [k, t]))); TITLE.settings = 'Settings';
   const ICON = Object.fromEntries(NAV.flatMap(([, items]) => items.map(([k, , i]) => [k, i])));
@@ -89,11 +89,26 @@
     else if (k === 'home') { v = view('home', () => {}); renderHome(v); }
     else if (k === 'settings') { v = view('settings', () => {}); renderSettings(v); }
     else if (k === 'ask') v = view('ask', (el) => renderAsk(el));
+    else if (k === 'organize') v = view('organize', (el) => renderOrganize(el));
     else { v = view('soon-' + k, (el) => renderSoon(el, k)); }
     for (const x of Object.values(views)) x.classList.toggle('on', x === v);
     document.querySelectorAll('.nav').forEach(n => n.classList.toggle('on', n.dataset.k === k));
     $('#toptitle').textContent = TITLE[k] || 'Curio'; document.title = (TITLE[k] ? TITLE[k] + ' · ' : '') + 'Curio';
     $('#side').classList.remove('open'); $('#scrim').classList.remove('on');
+  }
+
+  // ── Organize: tidy my own YouTube playlists and Pinterest boards (under development, after API approval) ──
+  function renderOrganize(el) {
+    const li = (t) => h('li', {}, t);
+    el.append(h('div', { class: 'page fade' }, h('div', { class: 'soonbox' },
+      h('div', { class: 'ic' }, ic('grid')), h('h1', {}, 'Organize'),
+      h('p', {}, h('span', { class: 'pill warn' }, 'Under development — after API approval')),
+      h('p', { class: 'sub', style: 'max-width:560px;margin:12px auto 10px' }, 'One place to tidy my own YouTube playlists and Pinterest boards from inside Curio. Every change goes through the official API, only on my own account, only when I press a button.'),
+      h('ul', { style: 'text-align:left;max-width:520px;margin:0 auto 18px' },
+        li('Make, rename and reorder my playlists and boards'), li('Move saved videos and pins between them — several at once, drag and drop'),
+        li('See saves by month'), li('Explore and Moodboard show the result right away, no new scan')),
+      h('p', { class: 'faint' }, 'YouTube: waiting for Google API approval · Pinterest: waiting for Pinterest API approval'),
+      h('div', { class: 'row', style: 'justify-content:center;margin-top:14px' }, h('a', { class: 'btn', href: '/inshall/', target: '_blank', rel: 'noopener' }, 'About Curio'), h('a', { class: 'btn', href: '/inshall/privacy-policy/', target: '_blank', rel: 'noopener' }, 'Privacy Policy')))));
   }
 
   function renderSoon(el, k) {
@@ -153,7 +168,14 @@
   // ── Settings + import ──
   function renderSettings(v) {
     v.replaceChildren(h('div', { class: 'page fade' }, h('h1', {}, 'Settings'), h('p', { class: 'sub' }, 'Curio on the web — your Pages and Finance, from any device.'),
-      h('div', { class: 'grid', style: 'grid-template-columns:1fr' }, aiCard(), storageCard(), desktopCard(), importCard(), themeCard(), accountCard())));
+      h('div', { class: 'grid', style: 'grid-template-columns:1fr' }, aiCard(), storageCard(), desktopCard(), importCard(), themeCard(), legalCard(), accountCard())));
+  }
+  function legalCard() {
+    const a = (href, t) => h('a', { class: 'btn', href, target: '_blank', rel: 'noopener' }, t);
+    return h('div', { class: 'card' }, h('h3', { style: 'margin:0' }, 'About & legal'),
+      h('p', { style: 'margin-top:8px' }, 'Curio by Inshall is a personal app, not for sale. These pages are public (no sign-in) — Pinterest and Google read them when they check the app.'),
+      h('div', { class: 'row', style: 'margin-top:10px;flex-wrap:wrap' }, a('/inshall/', 'About Curio'), a('/inshall/privacy-policy/', 'Privacy Policy'), a('/inshall/terms/', 'Terms of Use')),
+      h('p', { class: 'faint', style: 'margin-top:10px' }, 'Organize (YouTube playlists and Pinterest boards): under development — after API approval.'));
   }
   function storageCard() {
     const st = h('span', { class: 'pill' }, 'checking…');
