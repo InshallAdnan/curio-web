@@ -155,14 +155,13 @@
   V.tasks = async (p) => {
     const d = await api('tasks'); AREAS = d.areas;
     const row = (x, showDay) => h('div', { class: 'item' + (x.done ? ' done' : ''), onclick: () => taskForm(x) }, chk(x.done, x.color, (on) => act('task_done', { id: x.id, on }, on ? 'Done' : 'Opened again')),
-      h('div', { class: 't' }, h('b', {}, x.title), h('small', {}, [x.area, showDay && x.day ? dayLab(x.day) : '', x.time ? t12(x.time) + ' – ' + t12(endOf(x)) : '', x.repeat ? '↻ ' + x.repeat : ''].filter(Boolean).join('  ·  '))));
+      h('div', { class: 't' }, h('b', {}, x.title), h('small', {}, [x.area, showDay && x.day ? dayLab(x.day) : '', x.time ? t12(x.time) + ' – ' + t12(endOf(x)) : ''].filter(Boolean).join('  ·  '))));
     const els = [h('div', { class: 'row', style: { marginBottom: '10px' } }, h('div', { class: 'grow' }), h('button', { class: 'btn', onclick: boardsForm }, 'Boards'), h('button', { class: 'btn primary', onclick: () => taskForm({ day: iso(new Date()) }) }, '+ Task'))];
     for (const [k, t] of [['overdue', 'Overdue'], ['today', 'Today'], ['upcoming', 'Upcoming'], ['someday', 'No date']]) {
       if (!d[k].length && k !== 'today') continue;
       els.push(h('div', { class: 'card' }, h('h3', {}, t, h('span', { class: 'muted' }, d[k].length || '')), ...(d[k].length ? d[k].map(x => row(x, k !== 'today')) : [h('div', { class: 'empty' }, 'Nothing for today.')])));
     }
-    els.push(h('div', { class: 'row', style: { margin: '-4px 0 10px' } }, h('div', { class: 'grow' }), h('button', { class: 'btn sm', onclick: () => repForm() }, '+ Repeating task')));
-    if (d.repeating.length) els.push(h('div', { class: 'card' }, h('h3', {}, 'Repeating'), ...d.repeating.map(x => h('div', { class: 'item' }, h('div', { class: 't' }, h('b', {}, x.title), h('small', {}, `${x.rule} · done ${x.done}×` + (x.next ? ' · next ' + dayLab(x.next) : ''))),
+    if (false && d.repeating.length) els.push(h('div', { class: 'card' }, h('h3', {}, 'Repeating'), ...d.repeating.map(x => h('div', { class: 'item' }, h('div', { class: 't' }, h('b', {}, x.title), h('small', {}, `${x.rule} · done ${x.done}×` + (x.next ? ' · next ' + dayLab(x.next) : ''))),
       h('span', { class: 'pill', style: { '--c': x.state === 'running' ? 'var(--good)' : x.state === 'ending' ? 'var(--poor)' : 'var(--bad)' } }, x.state),
       x.state === 'running' || x.state === 'ending' ? h('button', { class: 'btn sm', onclick: () => confirm(`Stop “${x.title}”? Its history stays.`) && act('stop_series', { id: x.id }, 'Stopped') }, 'Stop')
         : h('button', { class: 'btn sm', onclick: () => act('restart_series', { id: x.id }, 'Restarted') }, 'Restart')))));

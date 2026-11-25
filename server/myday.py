@@ -62,7 +62,7 @@ CREATE TABLE IF NOT EXISTS goals(id INTEGER PRIMARY KEY, kind TEXT DEFAULT 'goal
 """
 
 DEFAULTS = {'morning_time': '08:00', 'memory_time': '21:30', 'notify': '1', 'calendar': '1', 'inspo_boards': '[]', 'sleep_goal': '450', 'bed_goal': '23:00',
-            'focus': '', 'focus_break': '45', 'repeat_past': 'done', 'wake_goal': '07:00', 'sleep_auto': '1', 'cal_sleep': '1', 'cal_focus': '0',
+            'focus': '', 'focus_break': '45', 'repeat_past': 'done', 'wake_goal': '07:00', 'sleep_auto': '1', 'cal_sleep': '1', 'cal_focus': '0', 'task_repeat': '0',
             'watch_all': '1', 'night_watch': '1', 'coach_strict': '2', 'coach_ai': '0', 'coach_ai_every': '30', 'plan_end': '23:00', 'drift_min': '15',
             # focus coach (10.23)
             'coach_ask': '15', 'coach_watch': '1', 'coach_bar': '1', 'coach_idle': '8', 'coach_wander': '1', 'coach_wander_every': '45',
@@ -304,6 +304,7 @@ def roll_repeats(c, t0=None):
     """a repeating task that was not ticked on its day: when the date changes, that day is closed by itself — counted as done
     (setting repeat_past = 'done', the default) or as missed ('missed') — and the copy for today (or the next day it is due) appears.
     Closed days stay in the task's history; un-ticking an auto-done day turns it into 'missed'."""
+    if setting(c, 'task_repeat') != '1': return 0                     # 10.40: repeating tasks are off — you make each task yourself
     t0 = t0 or today(); n = 0
     mode = setting(c, 'repeat_past') or 'done'
     rows = c.execute("SELECT id FROM tasks WHERE repeat IS NOT NULL AND done_at IS NULL AND next_id IS NULL AND day IS NOT NULL AND day < ? "
@@ -331,7 +332,7 @@ def complete(c, tid, on=True):
         c.execute('UPDATE tasks SET done_at=? WHERE id=?', (done_stamp(t), tid))
         sid = t.get('series') or tid
         if t['repeat'] and not t.get('series'): c.execute('UPDATE tasks SET series=? WHERE id=?', (sid, tid))
-        if t['repeat'] and not t['next_id']:
+        if t['repeat'] and not t['next_id'] and setting(c, 'task_repeat') == '1':
             base = date.fromisoformat(t['day']) if t['day'] else today()
             nd = _next_from(t['repeat'], base, today() + timedelta(days=1)) if base < today() else next_day(t['repeat'], base)
             if nd and (not t.get('repeat_end') or iso(nd) <= t['repeat_end']):
@@ -367,7 +368,7 @@ def done_stamp(t, at=None):
 def ensure_next(c, tid):
     """a repeating task: make sure the next copy exists (so deleting this day's copy does not stop the repeat)"""
     t = task(c, tid)
-    if not t or not t['repeat'] or t['next_id']: return None
+    if not t or not t['repeat'] or t['next_id'] or setting(c, 'task_repeat') != '1': return None
     base = date.fromisoformat(t['day']) if t['day'] else today(); sid = t.get('series') or tid
     nd = _next_from(t['repeat'], base, today() + timedelta(days=1)) if base < today() else next_day(t['repeat'], base)
     if not nd or (t.get('repeat_end') and iso(nd) > t['repeat_end']): return None
@@ -865,7 +866,7 @@ def calendar_events(start, end, con=None):
             else: s, e, allday = datetime(d.year, d.month, d.day), None, True
             out.append(dict(id=f"myday:{t['id']}", source='myday', mgroup=f"area:{t['area_id'] or 0}", record_id=t['id'], date=d, start=s, end=e, all_day=allday,
                             title=('✓ ' if t['done_at'] else '') + t['title'], color=col + '33', ink=col, readonly=False, mkind='task', mid=t['id'],
-                            calendar='Tracker · ' + (a.get('name') or 'Tasks'), detail=repeat_text(t['repeat'])))
+                            calendar='Tracker · ' + (a.get('name') or 'Tasks'), detail=repeat_text(t['repeat']) if setting(c, 'task_repeat') == '1' else ''))
         out += habit_events(c, start, end, ar)
         return out
     finally:
@@ -1293,6 +1294,21 @@ VID_EXT = {'.mp4', '.mov', '.webm', '.mkv', '.m4v', '.avi'}
 def inspo_sections(c):
     try: return json.loads(setting(c, 'inspo_sections') or '[]') or ['My Inspo']
     except Exception: return ['My Inspo']
+
+
+def rename_inspo_section(c, old, new):
+    new = (new or '').strip()[:30]; secs = inspo_sections(c)
+    if not new or old not in secs or (new in secs and new != old): return False
+    set_setting(c, 'inspo_sections', json.dumps([new if x == old else x for x in secs]))
+    c.execute('UPDATE inspo SET section=? WHERE section=?', (new, old)); c.commit(); return True
+
+
+def delete_inspo_section(c, name, move_to):
+    """a section goes; its cards move to another section (nothing is deleted)"""
+    secs = inspo_sections(c)
+    if name not in secs or len(secs) < 2 or move_to == name or move_to not in secs: return False
+    set_setting(c, 'inspo_sections', json.dumps([x for x in secs if x != name]))
+    c.execute('UPDATE inspo SET section=? WHERE section=?', (move_to, name)); c.commit(); return True
 
 
 def inspo_items(c, section=None):
@@ -2077,7 +2093,7 @@ def task_events(c, start, end, area=None):
         else: s, e, allday = datetime(d.year, d.month, d.day), None, True
         out.append(dict(id=f"myday:{t['id']}", source='myday', record_id=t['id'], date=d, start=s, end=e, all_day=allday, mkind='task', mid=t['id'],
                         title=('✓ ' if t['done_at'] else '') + t['title'], color=col + '33', ink=col, readonly=False, calendar=a.get('name') or 'Tasks',
-                        detail=repeat_text(t['repeat'])))
+                        detail=repeat_text(t['repeat']) if setting(c, 'task_repeat') == '1' else ''))
     return out
 
 
