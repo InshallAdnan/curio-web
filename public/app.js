@@ -74,7 +74,7 @@
   }
   const theme = () => document.documentElement.dataset.theme || 'light';
   function frame(k, src) {
-    return view(k, (v) => { v.classList.add('frame'); v.append(h('iframe', { src, title: TITLE[k] })); });
+    return view(k, (v) => { v.classList.add('frame'); v.append(h('iframe', { src, title: TITLE[k], allow: 'microphone' })); });
   }
 
   function route() {
@@ -386,6 +386,47 @@
       return out;
     }).join('');
   }
+  // ── voice: speak instead of typing (the browser turns speech into text), and listen to an answer ──
+  const VOICE_LANGS = [['hi-IN', 'Hindi / Urdu (हिंदी)'], ['ur-PK', 'Urdu (اردو)'], ['en-IN', 'English (India)'], ['en-US', 'English (US)']];
+  const voiceLang = (v) => { try { if (v) localStorage.setItem('curio-voice-lang', v); return localStorage.getItem('curio-voice-lang') || 'hi-IN'; } catch (e) { return 'hi-IN'; } };
+  function micButton(input, onDone) {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const b = h('button', { class: 'btn mic', title: 'Speak instead of typing — press again to stop and send (right-click: language)' }, '🎙');
+    if (!SR) { b.title = 'Speaking needs Chrome or Edge on this device'; b.onclick = () => toast('Speaking works in Chrome or Edge. In this browser, type instead.'); return b; }
+    let rec = null, base = '', final = '', stopped = false;
+    const reset = () => { rec = null; b.classList.remove('on'); b.textContent = '🎙'; };
+    b.onclick = () => {
+      if (rec) { stopped = true; rec.stop(); return; }
+      rec = new SR(); rec.lang = voiceLang(); rec.interimResults = true; rec.continuous = true; base = input.value ? input.value.trim() + ' ' : ''; final = ''; stopped = false;
+      rec.onresult = (e) => { let mid = ''; for (let i = e.resultIndex; i < e.results.length; i++) { const t = e.results[i][0].transcript; if (e.results[i].isFinal) final += t + ' '; else mid += t; }
+        input.value = (base + final + mid).trimStart(); input.dispatchEvent(new Event('input')); };
+      rec.onerror = (e) => {
+        const m = { 'not-allowed': 'The browser is blocking the microphone. Click the lock icon next to the address › Microphone › Allow, then press 🎙 again.',
+          'service-not-allowed': 'The browser is blocking the microphone. Click the lock icon next to the address › Microphone › Allow, then press 🎙 again.',
+          'no-speech': 'No speech heard — press 🎙 and speak.', 'audio-capture': 'No microphone was found on this device.', 'network': 'Speech needs the internet — check the connection.' }[e.error];
+        if (m) toast(m); stopped = true;
+      };
+      rec.onend = () => { const was = stopped; reset(); if (input.value.trim() && was !== null) onDone && onDone(); };
+      try { rec.start(); b.classList.add('on'); b.textContent = '■'; toast('Listening… press ■ when you are done'); } catch (e) { reset(); toast('The microphone could not start: ' + e.message); }
+    };
+    b.oncontextmenu = (e) => { e.preventDefault(); const cur = voiceLang(); const pick = prompt('Speaking language:\n' + VOICE_LANGS.map(([k, t], i) => `${i + 1}. ${t}${k === cur ? '  ✓' : ''}`).join('\n') + '\n\nType 1–' + VOICE_LANGS.length, '');
+      const i = parseInt(pick, 10) - 1; if (VOICE_LANGS[i]) { voiceLang(VOICE_LANGS[i][0]); toast('Speaking language: ' + VOICE_LANGS[i][1]); } };
+    return b;
+  }
+  function speakButton(getText) {
+    if (!('speechSynthesis' in window)) return null;
+    const b = h('button', { class: 'btn ghost sm speak', title: 'Listen to this answer' }, '🔊 Listen');
+    b.onclick = () => {
+      if (speechSynthesis.speaking) { speechSynthesis.cancel(); document.querySelectorAll('.speak.on').forEach(x => { x.classList.remove('on'); x.textContent = '🔊 Listen'; }); if (b._on) { b._on = false; return; } }
+      const txt = getText().replace(/[#*_`>|]/g, ' ').replace(/\[P\d+\]/g, ''); const u = new SpeechSynthesisUtterance(txt);
+      const vs = speechSynthesis.getVoices(); const hasDeva = /[\u0900-\u097F]/.test(txt), hasArab = /[\u0600-\u06FF]/.test(txt);
+      const want = hasDeva ? 'hi' : hasArab ? 'ur' : 'en'; u.voice = vs.find(v => v.lang.toLowerCase().startsWith(want + '-in')) || vs.find(v => v.lang.toLowerCase().startsWith(want)) || null; if (u.voice) u.lang = u.voice.lang;
+      u.onend = u.onerror = () => { b._on = false; b.classList.remove('on'); b.textContent = '🔊 Listen'; };
+      b._on = true; b.classList.add('on'); b.textContent = '■ Stop'; speechSynthesis.speak(u);
+    };
+    return b;
+  }
+
   function renderAsk(el) {
     let cur = null, busy = false, status = null;
     const list = h('div', { class: 'chatlist' });
@@ -396,8 +437,8 @@
     const banner = h('div');
     const wrap = h('div', { class: 'ask' },
       h('aside', { class: 'askside' }, h('button', { class: 'btn primary', style: 'width:100%;justify-content:center', onclick: () => open(null) }, '+ New chat'), list),
-      h('section', { class: 'askmain' }, banner, log, h('div', { class: 'composer' }, h('div', { class: 'cbox' }, input, send), h('div', { class: 'row', style: 'justify-content:space-between;margin-top:6px' }, modelTag,
-        h('span', { class: 'faint' }, 'Enter to send · Shift+Enter new line')))));
+      h('section', { class: 'askmain' }, banner, log, h('div', { class: 'composer' }, h('div', { class: 'cbox' }, input, micButton(input, () => go()), send), h('div', { class: 'row', style: 'justify-content:space-between;margin-top:6px' }, modelTag,
+        h('span', { class: 'faint' }, 'Enter to send · Shift+Enter new line · 🎙 speak (right-click: language)')))));
     el.append(wrap);
     input.addEventListener('input', () => { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 200) + 'px'; });
     input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); go(); } });
@@ -462,7 +503,7 @@
           const pend = m.actions.filter(p => p.status === 'pending').length;
           return h('div', { class: 'fcards' }, cards, pend > 1 ? h('button', { class: 'btn', onclick: () => cards.forEach(c => c._save && m.actions[cards.indexOf(c)].status === 'pending' && c._save()) }, `Save all ${pend}`) : null);
         })() : null,
-        m.model ? h('div', { class: 'faint', style: 'margin-top:6px' }, m.model) : null));
+        h('div', { class: 'row', style: 'margin-top:6px;gap:8px' }, m.err ? null : speakButton(() => m.content || ''), m.model ? h('span', { class: 'faint' }, m.model) : null)));
     };
     const empty = () => h('div', { class: 'askempty' }, h('div', { class: 'soonbox', style: 'padding:40px 10px' }, h('div', { class: 'ic' }, ic('bot')), h('h1', {}, 'Ask AI'),
       h('p', { class: 'sub', style: 'max-width:480px;margin:8px auto 18px' }, 'Chat with ChatGPT on your own plan. It knows your Finance book — ask about your money, or say “record 1200 lunch” and it adds it.'),

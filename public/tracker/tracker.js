@@ -109,6 +109,24 @@
     p.replaceChildren(...els);
   };
 
+  // 🎙 speak instead of typing (the browser turns speech into text; language as on Ask AI)
+  function micBtn(input, onDone) {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const b = h('button', { class: 'btn mic', title: 'Speak instead of typing — press again to stop and send' }, '🎙');
+    if (!SR) { b.onclick = () => toast('Speaking works in Chrome or Edge.'); return b; }
+    let rec = null, base = '', fin = '';
+    b.onclick = () => {
+      if (rec) { rec.stop(); return; }
+      rec = new SR(); let lang = 'hi-IN'; try { lang = localStorage.getItem('curio-voice-lang') || 'hi-IN'; } catch (e) { /* default */ }
+      rec.lang = lang; rec.interimResults = true; rec.continuous = true; base = input.value ? input.value.trim() + ' ' : ''; fin = '';
+      rec.onresult = (e) => { let mid = ''; for (let i = e.resultIndex; i < e.results.length; i++) { const t = e.results[i][0].transcript; if (e.results[i].isFinal) fin += t + ' '; else mid += t; } input.value = (base + fin + mid).trimStart(); };
+      rec.onerror = (e) => { if (e.error === 'not-allowed' || e.error === 'service-not-allowed') toast('The browser is blocking the microphone: lock icon next to the address › Microphone › Allow.'); else if (e.error === 'no-speech') toast('No speech heard.'); };
+      rec.onend = () => { rec = null; b.classList.remove('on'); b.textContent = '🎙'; if (input.value.trim()) onDone(); };
+      try { rec.start(); b.classList.add('on'); b.textContent = '■'; toast('Listening… press ■ when you are done'); } catch (e) { rec = null; toast(e.message); }
+    };
+    return b;
+  }
+
   // ── Ask AI about a day: the chat is saved, and the AI reads your earlier chats and your last 7 days before it answers ──
   async function aiCard(day) {
     const box = h('div', { class: 'card' });
@@ -121,8 +139,9 @@
       q.addEventListener('keydown', (k) => { if (k.key === 'Enter') go.click(); });
       box.replaceChildren(...[h('h3', {}, 'Ask AI about ' + (day === iso(new Date()) ? 'today' : dayLab(day))),
         h('div', { class: 'faint', style: { marginBottom: '8px' } }, 'The chat is saved. The AI reads your earlier chats and your last 7 days before it answers — so tell it things once (e.g. “Canva is work”, “lunch is 1–2 PM”).'),
-        ...d.chat.slice(-12).map(m => h('div', { class: 'bub ' + (m.role === 'user' ? 'me' : 'ai') }, m.text)),
-        h('div', { class: 'row', style: { marginTop: '8px' } }, q, go),
+        ...d.chat.slice(-12).map(m => h('div', { class: 'bub ' + (m.role === 'user' ? 'me' : 'ai') }, m.text, m.role !== 'user' && 'speechSynthesis' in window ? h('button', { class: 'lis', title: 'Listen', onclick: () => {
+          if (speechSynthesis.speaking) { speechSynthesis.cancel(); return; } const u = new SpeechSynthesisUtterance(m.text); const v = speechSynthesis.getVoices().find(x => /^en-IN|^hi/i.test(x.lang)); if (v) u.voice = v; speechSynthesis.speak(u); } }, '🔊') : null)),
+        h('div', { class: 'row', style: { marginTop: '8px' } }, q, micBtn(q, () => go.click()), go),
         d.saved ? h('div', { class: 'row', style: { marginTop: '8px' } }, h('span', { class: 'faint grow' }, `${d.saved} message${d.saved === 1 ? '' : 's'} saved`),
           d.chat.length ? h('button', { class: 'btn sm soft', onclick: async () => { if (!confirm('Delete this day’s chat with the AI?')) return; await api('ai_clear', { day }); fill(await api('ai_day', { day })); } }, 'Clear this day') : null,
           h('button', { class: 'btn sm soft', onclick: async () => { if (!confirm('Delete every saved chat with the AI? It will not remember them any more.')) return; await api('ai_clear', {}); fill(await api('ai_day', { day })); } }, 'Forget all chats')) : null].filter(Boolean));

@@ -79,3 +79,6 @@ label.l { display: block; font-size: 12.5px; color: var(--muted); font-weight: 6
 .bub { padding: 8px 11px; border-radius: 12px; margin: 6px 0; white-space: pre-wrap; font-size: 14px; max-width: 88%; }
 .bub.me { background: var(--soft); margin-left: auto; } .bub.ai { background: var(--card2); }
 .row .inp { flex: 1; }
+
+.btn.mic { width: 36px; padding: 0; flex: none; } .btn.mic.on { background: var(--bad); border-color: var(--bad); color: #fff; }
+.bub .lis { border: 0; background: none; cursor: pointer; font-size: 13px; margin-left: 6px; opacity: .7; } .bub .lis:hover { opacity: 1; }
