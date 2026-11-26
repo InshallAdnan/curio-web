@@ -1,7 +1,7 @@
 """Curio Web — the Tracker's Inspo inside Docs (same as the desktop's docs_link.py, on the web database).
 
-Docs › "Inspo" has two tables: "Goals" (every goal and dream, written by the Tracker — one way, Tracker → Docs) and
-"Inspo cards" (a card becomes a row when you press "Convert into page"). Each row is a page for more pictures and text.
+Docs › Curio Database › Inspo › "Goals" (its own page with the table of every goal and dream, written by the Tracker — one way)
+and Inspo › "Inspo cards" (its own page; a card becomes a row when you press "Convert into page"). Each row is a page for more pictures and text.
 Nothing is deleted: a goal removed from the Tracker keeps its page, marked "Removed"."""
 import json, re, uuid
 from datetime import date
@@ -29,30 +29,65 @@ def _u(): return uuid.uuid4().hex[:8]
 def _day(ts): return {'start': ts[:10]} if ts else None
 
 
-def _ids(c): return dict(root=M.setting(c, 'inspo_page_root') or '', cdb=M.setting(c, 'inspo_cards_db') or '', gdb=M.setting(c, 'inspo_goals_db') or '')
+EXTRA = {'top': 'curio_db_page', 'gpage': 'inspo_goals_page', 'cpage': 'inspo_cards_page'}
+INTRO = 'Made by Tracker › Inspo. Goals come from the Tracker by themselves; a card is added to Inspo cards when you press “Convert into page”.'
+
+
+def _ids(c):
+    d = dict(root=M.setting(c, 'inspo_page_root') or '', cdb=M.setting(c, 'inspo_cards_db') or '', gdb=M.setting(c, 'inspo_goals_db') or '')
+    d.update({k: M.setting(c, v) or '' for k, v in EXTRA.items()}); return d
+
+
+def _blocks(doc):
+    try: return json.loads((doc or {}).get('content') or '[]') or []
+    except Exception: return []
+
+
+def _has(blocks, typ, key, val):
+    return any(isinstance(b, dict) and b.get('type') == typ and (b.get('props') or {}).get(key) == val for b in blocks)
 
 
 def _ensure(st):
-    """inside PG.run → (root page, cards table, goals table); makes what is missing"""
-    root = st['root'] if st['root'] and PG.get_doc(st['root']) else PG.create(None, 'Inspo', None, '✨')
-    have = {d['id'] for d in PG.db_list()}
-    cdb = st['cdb'] if st['cdb'] in have else PG.db_create(root, {'title': 'Inspo cards', 'icon': '🖼️', 'props': CARD_PROPS, 'views': [
+    """inside PG.run → (Inspo page, cards table, goals table). 10.51: every part has its own page —
+    Curio Database › Inspo › Goals (its table) and Inspo cards (its table). Moves an older Inspo (both tables on one page) into this."""
+    def page(key, parent, title, icon):
+        d = PG.get_doc(st.get(key) or '') if st.get(key) else None
+        if not d: st[key] = PG.create(parent, title, None, icon); return st[key]
+        if parent and d.get('parentId') != parent: PG.move(st[key], parent)
+        return st[key]
+    top = page('top', None, 'Curio Database', '🗂️')
+    root = page('root', top, 'Inspo', '✨')
+    gpage = page('gpage', root, 'Goals', '🎯')
+    cpage = page('cpage', root, 'Inspo cards', '🖼️')
+    have = {d['id']: d for d in PG.db_list()}
+    cdb = st['cdb'] if st['cdb'] in have else PG.db_create(cpage, {'title': 'Inspo cards', 'icon': '🖼️', 'props': CARD_PROPS, 'views': [
         {'id': _u(), 'name': 'Gallery', 'type': 'gallery', 'cardSize': 'm'}, {'id': _u(), 'name': 'Table', 'type': 'table', 'sorts': [{'prop': 'added', 'dir': 'desc'}]}]})['id']
-    gdb = st['gdb'] if st['gdb'] in have else PG.db_create(root, {'title': 'Goals', 'icon': '🎯', 'props': GOAL_PROPS, 'views': [
+    gdb = st['gdb'] if st['gdb'] in have else PG.db_create(gpage, {'title': 'Goals', 'icon': '🎯', 'props': GOAL_PROPS, 'views': [
         {'id': _u(), 'name': 'Table', 'type': 'table', 'sorts': [{'prop': 'added', 'dir': 'desc'}]}, {'id': _u(), 'name': 'Gallery', 'type': 'gallery', 'cardSize': 'm'}]})['id']
-    doc = PG.get_doc(root) or {}
-    try: cur = json.loads(doc.get('content') or '[]') or []
-    except Exception: cur = []
-    ids = {b.get('props', {}).get('dbId') for b in cur if isinstance(b, dict) and b.get('type') == 'database'}
-    want = [{'type': 'database', 'props': {'dbId': gdb}}, {'type': 'database', 'props': {'dbId': cdb}}]
-    if not {cdb, gdb} <= ids:
-        head = [] if cur else [{'type': 'paragraph', 'content': 'Made by Tracker › Inspo. Goals come from the Tracker by themselves; a card is added here when you press “Convert into page”.'}]
-        PG.update(root, {'content': json.dumps(head + cur + [b for b in want if b['props']['dbId'] not in ids] + ([] if cur else [{'type': 'paragraph'}]))})
+    for dbid, pg in ((cdb, cpage), (gdb, gpage)):
+        if (PG.db_get(dbid) or {}).get('db', {}).get('parent') != pg: PG.db_update(dbid, {'parent': pg})
+        cur = _blocks(PG.get_doc(pg))
+        if not _has(cur, 'database', 'dbId', dbid): PG.update(pg, {'content': json.dumps([{'type': 'database', 'props': {'dbId': dbid}}] + (cur or [{'type': 'paragraph'}]))})
+    # Inspo: a line + links to its two pages (the tables no longer sit here)
+    cur = _blocks(PG.get_doc(root)); keep = [b for b in cur if not (isinstance(b, dict) and b.get('type') == 'database' and (b.get('props') or {}).get('dbId') in (cdb, gdb))]
+    if not any(isinstance(b, dict) and b.get('type') == 'paragraph' and 'Made by Tracker' in json.dumps(b.get('content') or '') for b in keep):
+        keep = [{'type': 'paragraph', 'content': INTRO}] + keep
+    miss = [pid for pid in (gpage, cpage) if not _has(keep, 'pageLink', 'docId', pid)]
+    if miss:
+        while keep and isinstance(keep[-1], dict) and keep[-1].get('type') == 'paragraph' and not keep[-1].get('content'): keep.pop()
+        keep += [{'type': 'pageLink', 'props': {'docId': pid}} for pid in miss] + [{'type': 'paragraph'}]
+    if keep != cur: PG.update(root, {'content': json.dumps(keep)})
+    cur = _blocks(PG.get_doc(top))
+    if not _has(cur, 'pageLink', 'docId', root):
+        head = [] if cur else [{'type': 'paragraph', 'content': 'Everything Curio keeps for you, one page each: Inspo (Goals, Inspo cards) — more parts come here later.'}]
+        PG.update(top, {'content': json.dumps(head + cur + [{'type': 'pageLink', 'props': {'docId': root}}, {'type': 'paragraph'}])})
     return root, cdb, gdb
 
 
-def _save_ids(c, root, cdb, gdb):
+def _save_ids(c, root, cdb, gdb, ex=None):
     for k, v in (('inspo_page_root', root), ('inspo_cards_db', cdb), ('inspo_goals_db', gdb)): M.set_setting(c, k, v)
+    for k, v in (ex or {}).items():
+        if k in EXTRA and v: M.set_setting(c, EXTRA[k], v)
 
 
 def _sig(gs): return json.dumps([(g['id'], g['kind'], g['title'], g['why'], g.get('created'), g.get('done_at'), g.get('due'), g.get('page_id')) for g in gs])
@@ -60,7 +95,7 @@ def _sig(gs): return json.dumps([(g['id'], g['kind'], g['title'], g['why'], g.ge
 
 def goal_pages(force=False):
     st = tracker.run(lambda c: dict(gs=M.goals(c, 'goal') + M.goals(c, 'dream'), sig=M.setting(c, 'goal_pages_sig'), **_ids(c)))
-    if not force and st['sig'] == _sig(st['gs']): return
+    if not force and st['sig'] == _sig(st['gs']) and st.get('top'): return           # 10.51: once more to give Inspo its own pages
 
     def go():
         root, cdb, gdb = _ensure(st); rows = {r['id']: r for r in PG.db_get(gdb)['rows']}; got = {}
@@ -73,11 +108,11 @@ def goal_pages(force=False):
             got[g['id']] = pid
         for rid, r in rows.items():
             if rid not in got.values() and (r.get('props') or {}).get('type') != 'removed': PG.row_update(rid, {'props': {'type': 'removed'}})
-        return dict(root=root, cdb=cdb, gdb=gdb, got=got)
+        return dict(root=root, cdb=cdb, gdb=gdb, got=got, ex={k: st.get(k) for k in EXTRA})
     res = PG.run(go)
 
     def back(c):
-        _save_ids(c, res['root'], res['cdb'], res['gdb'])
+        _save_ids(c, res['root'], res['cdb'], res['gdb'], res['ex'])
         for gid, pid in res['got'].items(): c.execute('UPDATE goals SET page_id=? WHERE id=?', (pid, gid))
         c.commit(); M.set_setting(c, 'goal_pages_sig', _sig(M.goals(c, 'goal') + M.goals(c, 'dream')))
     tracker.run(back)
@@ -105,9 +140,9 @@ def card_page(iid):
                                 'props': {'sec': oid, 'kind': kind, 'added': _day(it.get('created')), 'made': {'start': date.today().isoformat()}}})
         blocks = ([{'type': 'paragraph', 'content': it['text']}] if it.get('text') else []) + ([{'type': 'paragraph', 'content': it['url']}] if it.get('url') else []) + [{'type': 'paragraph'}]
         PG.update(r['id'], {'content': json.dumps(blocks)})
-        return dict(root=root, cdb=cdb, gdb=gdb, pid=r['id'])
+        return dict(root=root, cdb=cdb, gdb=gdb, pid=r['id'], ex={k: st.get(k) for k in EXTRA})
     res = PG.run(go)
-    tracker.run(lambda c: (_save_ids(c, res['root'], res['cdb'], res['gdb']), M.update_inspo(c, iid, page_id=res['pid'])))
+    tracker.run(lambda c: (_save_ids(c, res['root'], res['cdb'], res['gdb'], res['ex']), M.update_inspo(c, iid, page_id=res['pid'])))
     return dict(page_id=res['pid'])
 
 
