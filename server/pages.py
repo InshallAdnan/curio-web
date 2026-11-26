@@ -511,6 +511,7 @@ EXT = {
     'comment_set': _snap_rpc(lambda cid, done: comment_set(cid, done) or {}), 'comment_del': _snap_rpc(lambda cid: comment_del(cid) or {}),
     'make_zip': lambda name, files: make_zip(name, json.loads(files or '[]')),
     'calendar_add': _calendar_add,
+    'notion_import': lambda payload: __import__('notion_import').build(json.loads(payload or '{}')),
 }
 
 

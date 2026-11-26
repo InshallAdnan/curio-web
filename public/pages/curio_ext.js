@@ -320,6 +320,78 @@
     inp.click();
   }
 
+  // ── Import from Notion: Notion › ⋯ › Export › "Markdown & CSV" (with sub-pages) → the .zip it makes ──
+  const IS_WEB = /^https?:/.test(location.protocol);
+  function loadZipLib() {
+    if (window.fflate) return Promise.resolve(window.fflate);
+    return new Promise((ok, bad) => { const sc = h('script', { src: 'fflate.min.js' }); sc.onload = () => ok(window.fflate); sc.onerror = () => bad(new Error('Could not load the zip reader.')); document.head.append(sc); });
+  }
+  const b64 = (u8) => { let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(s); };
+  const MIME = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml', mp4: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm', mp3: 'audio/mpeg', m4a: 'audio/mp4', pdf: 'application/pdf' };
+  const LIMIT = 2.9 * 1024 * 1024;
+  async function shrink(u8, ext) {            // a big photo → a smaller JPEG that fits Curio Web
+    const bmp = await createImageBitmap(new Blob([u8], { type: MIME[ext] || 'image/jpeg' }));
+    let w = bmp.width, hh = bmp.height, k = Math.min(1, 2560 / Math.max(w, hh)), q = 0.86;
+    for (let t = 0; t < 6; t++) {
+      const cv = document.createElement('canvas'); cv.width = Math.round(w * k); cv.height = Math.round(hh * k);
+      cv.getContext('2d').drawImage(bmp, 0, 0, cv.width, cv.height);
+      const blob = await new Promise(r => cv.toBlob(r, 'image/jpeg', q));
+      const out = new Uint8Array(await blob.arrayBuffer());
+      if (out.length <= LIMIT) return out;
+      k *= 0.8; q = Math.max(0.6, q - 0.08);
+    }
+    return null;
+  }
+  async function importNotion() {
+    if (!IS_WEB) {
+      return modal('Import from Notion', h('div', { class: 'cx-mb' },
+        h('p', {}, 'Docs on Curio Web is the original, so the Notion import runs there — then it comes to this PC by itself.'),
+        h('p', {}, '1. Open Curio Web › Docs › ⋯ (top right) › Import & export › Import from Notion, and choose Notion’s .zip.'),
+        h('p', {}, '2. Here: Settings › Data & sync › Curio Web › Update from web.')));
+    }
+    const inp = h('input', { type: 'file', accept: '.zip', style: { display: 'none' } }); document.body.append(inp);
+    inp.onchange = async () => {
+      const f = inp.files[0]; inp.remove(); if (!f) return;
+      const line = h('p', {}, 'Opening the zip…'), bar = h('div', { style: { height: '6px', borderRadius: '3px', background: 'hsl(var(--muted))', overflow: 'hidden', marginTop: '10px' } }, h('div', { style: { height: '100%', width: '0%', background: '#f2602d', transition: 'width .2s' } }));
+      const m = modal('Import from Notion', h('div', { class: 'cx-mb' }, h('p', {}, `“${f.name}”`), line, bar));
+      const prog = (txt, frac) => { line.textContent = txt; if (frac != null) bar.firstChild.style.width = Math.round(frac * 100) + '%'; };
+      try {
+        const Z = await loadZipLib();
+        let all = Z.unzipSync(new Uint8Array(await f.arrayBuffer()));
+        for (const [n, d] of Object.entries(all)) if (/\.zip$/i.test(n)) { Object.assign(all, Z.unzipSync(d)); delete all[n]; }   // Notion's "Part-1.zip" inside
+        const pages = {}, csvs = {}, media = [];
+        const dec = new TextDecoder('utf-8');
+        for (const [n, d] of Object.entries(all)) {
+          if (n.endsWith('/') || /(^|\/)__MACOSX\//.test(n)) continue;
+          if (/\.md$/i.test(n)) pages[n] = dec.decode(d);
+          else if (/\.csv$/i.test(n)) csvs[n] = dec.decode(d).replace(/^\uFEFF/, '');
+          else media.push([n, d]);
+        }
+        if (!Object.keys(pages).length && !Object.keys(csvs).length) throw new Error('This zip has no Notion pages. In Notion: ⋯ › Export › Markdown & CSV.');
+        const files = {}, skipped = []; let done = 0;
+        const one = async ([n, d]) => {
+          const base = n.split('/').pop(), ext = (base.split('.').pop() || '').toLowerCase();
+          let data = d;
+          if (data.length > LIMIT && /^(jpe?g|png|webp)$/.test(ext)) { try { data = await shrink(d, ext); } catch { data = null; } }
+          if (!data || data.length > LIMIT) { skipped.push(base); return; }
+          const url = 'data:' + (MIME[ext] || 'application/octet-stream') + ';base64,' + b64(data);
+          try { const r = await core('upload', base, url, ''); if (r && r.url) files[base] = r.url; else skipped.push(base); }
+          catch { skipped.push(base); }
+        };
+        const queue = media.slice(); const workers = [];
+        for (let k = 0; k < 3; k++) workers.push((async () => { while (queue.length) { const it = queue.shift(); await one(it); done++; prog(`Uploading pictures and videos… ${done} / ${media.length}`, media.length ? done / media.length * 0.9 : 0.9); } })());
+        await Promise.all(workers);
+        prog('Making the pages, tables and rows…', 0.95);
+        const r = await ext('notion_import', JSON.stringify({ pages, csvs, files, skipped }));
+        prog(`Done: ${r.pages} pages, ${r.tables} tables, ${r.rows} rows` + (r.skipped ? ` · ${r.skipped} big file(s) not imported yet` : '') + '.', 1);
+        setTimeout(() => { m.close(); settle('#/documents/' + r.id); }, 1800);
+      } catch (e) { prog('Import stopped: ' + e.message, null); }
+    };
+    inp.click();
+  }
+
+  window.__cxImportNotion = importNotion;
+
   async function exportPage(kind) {
     const ed = bn(); if (!ed) return;
     const doc = await core('get', docId()).catch(() => ({}));
@@ -403,6 +475,7 @@
         h('span', { class: 'ic' }, '🔒'), 'Lock page', sw(!!m.locked)),
       item('⤺', 'Undo', undo, 'Ctrl+Z'),
       moreRow, ...(moreOpen ? [
+        item('📥', 'Import from Notion (.zip)', importNotion),
         item('⬇', 'Import (Markdown, text, HTML, CSV)', importFile),
         item('⬆', 'Export as Markdown', () => exportPage('md')),
         item('⬆', 'Export as HTML', () => exportPage('html')),
@@ -438,6 +511,7 @@
     menu.prepend(search);
     // the original “Full width” lives in Appearance now
     items.filter(i => i.innerText.trim() === 'Full width').forEach(i => i.style.display = 'none');
+    items.filter(i => /^Send to Notion$/.test(i.innerText.trim())).forEach(i => i.style.display = 'none');   // Notion is switched off (coming soon)
     menu.__cxHide = items.filter(i => i.innerText.trim() === 'Full width');
     const box = h('div', { id: 'cx-menu' }, ...ourItems(menu));
     const first = items.find(i => i.innerText.trim() !== 'Full width') || items[0];
