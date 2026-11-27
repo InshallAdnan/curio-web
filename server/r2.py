@@ -147,7 +147,7 @@ def status():
     except Exception: pass
     if out['on']:
         try:
-            import urllib.request
-            with urllib.request.urlopen(worker_url() + '/health', timeout=8) as r: out['worker_ok'] = json.loads(r.read()).get('ok') is True
+            import urllib.request                                # (a name of our own: Cloudflare turns away Python's default)
+            with urllib.request.urlopen(urllib.request.Request(worker_url() + '/health', headers={'User-Agent': 'Curio-Web/1.0'}), timeout=8) as r: out['worker_ok'] = json.loads(r.read()).get('ok') is True
         except Exception as e: out['worker_ok'] = False; out['worker_err'] = str(e)[:120]
     return out
