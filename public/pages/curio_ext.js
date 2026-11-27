@@ -369,8 +369,14 @@
         }
         if (!Object.keys(pages).length && !Object.keys(csvs).length) throw new Error('This zip has no Notion pages. In Notion: ⋯ › Export › Markdown & CSV.');
         const files = {}, skipped = []; let done = 0;
+        const r2 = window.curioR2On ? await window.curioR2On() : false;          // 10.52: on Cloudflare R2 any size goes up, videos too
         const one = async ([n, d]) => {
           const base = n.split('/').pop(), ext = (base.split('.').pop() || '').toLowerCase();
+          if (r2) {
+            try { files[base] = await window.curioUpload(new Blob([d], { type: MIME[ext] || 'application/octet-stream' }), base); }
+            catch { skipped.push(base); }
+            return;
+          }
           let data = d;
           if (data.length > LIMIT && /^(jpe?g|png|webp)$/.test(ext)) { try { data = await shrink(d, ext); } catch { data = null; } }
           if (!data || data.length > LIMIT) { skipped.push(base); return; }

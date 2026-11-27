@@ -126,5 +126,98 @@ def pull(part):
         body = {'ok': True, 'part': 'tracker', 'rev': rev['tracker'], 'tables': {k[len(tracker.PFX):]: v for k, v in data.items()}}
     else:
         raise ValueError('part must be finance, pages or tracker')
+    try:                                                                # 10.52: the next new ids, so both sides number new rows alike
+        names = list(body['tables'].keys()); real = [tracker.PFX + n for n in names] if part == 'tracker' else names
+        rows = tdb.remote().run([('SELECT name, seq FROM sqlite_sequence WHERE name IN (%s)' % ','.join('?' * len(real)), tuple(real))])[0].rows if real else []
+        body['seq'] = {(n[len(tracker.PFX):] if part == 'tracker' else n): q for n, q in rows}
+    except Exception: body['seq'] = {}
     return gzip.compress(json.dumps(body, ensure_ascii=False, separators=(',', ':')).encode('utf-8'), 6)
 
+
+
+# ───────────────────────── 10.52: live sync — the desktop sends its changes (two-way, no button) ─────────────────────────
+PUSH_TABLES = {
+    'finance': set(fin.TABLES),
+    'pages': set(pages.TABLES),
+    'tracker': {n for n in tracker.NAMES if n not in ('activity', 'ai_chat')},
+}
+_STMT = re.compile(r'^\s*(INSERT(?:\s+OR\s+\w+)?\s+INTO|REPLACE\s+INTO|UPDATE(?:\s+OR\s+\w+)?|DELETE\s+FROM)\s+"?(\w+)"?', re.I)
+LOCAL_FILE = re.compile(r'file:///[^"\'\s)\\]*?/pages/files/([\w.-]+)')
+
+
+def _clean(part, sql):
+    """only plain row changes on this part's own tables; the PC's picture links go back to /api/file/<id>"""
+    m = _STMT.match(sql or '')
+    if not m or m.group(2).lower() not in {t.lower() for t in PUSH_TABLES[part]}: return None
+    if part == 'pages': sql = LOCAL_FILE.sub(lambda x: '/api/file/' + x.group(1), sql)
+    if part == 'tracker': sql = tracker.sql(sql)
+    return sql
+
+
+def push(a):
+    """{part, base, stmts:[sql…]} → written on the web in one go. When the web changed in between (base is old) the
+    changes still go in on top (last change wins) and the answer says clean=False, so the desktop takes the web's copy."""
+    part = a.get('part')
+    if part not in PUSH_TABLES: raise ValueError('part must be finance, pages or tracker')
+    raw = a.get('stmts') or []
+    if len(raw) > 2000: raise ValueError('too many changes in one go')
+    stmts = [(s, ()) for s in (_clean(part, x) for x in raw) if s]
+    base = int(a.get('base') or 0); r = tdb.remote()
+    tdb.Snapshot._ensure_rev(r); r.run([('INSERT OR IGNORE INTO _rev (name, rev) VALUES (?, 0)', (part,))])
+    if not stmts: return {'rev': _revs()[part], 'clean': True, 'n': 0}
+    for _ in range(4):
+        cur = _revs()[part]
+        if r.guarded('UPDATE _rev SET rev=? WHERE name=? AND rev=?', (cur + 1, part, cur), stmts):
+            return {'rev': cur + 1, 'clean': cur == base, 'n': len(stmts)}
+    raise tdb.Conflict('The web was busy — the desktop will send again in a moment.')
+
+
+def lib_save(a):
+    """the desktop sends one collection item online (its files are already on R2): same row as a web save"""
+    import library
+    return library.save(a)
+
+
+def lib_board(a):
+    """make sure a board (collection) with this name exists on the web → its id; and put these items in it"""
+    import library
+    name = str(a.get('name') or '').strip()[:80]
+    if not name: raise ValueError('name')
+    got = library._db([('SELECT id FROM lib_boards WHERE name=? AND parent IS NULL', (name,))])[0].rows
+    bid = got[0][0] if got else library._db([('INSERT INTO lib_boards (name, parent, color, created, pos) VALUES (?,?,?,?,0)', (name, None, a.get('color'), time.time()))])[0].last_id
+    items = [(str(x.get('platform')), str(x.get('item_id'))) for x in (a.get('items') or [])][:2000]
+    if items: library._db([('INSERT OR IGNORE INTO lib_board_items (board, platform, item_id, added) VALUES (?,?,?,?)', (bid, p, i, time.time())) for p, i in items])
+    return {'id': bid}
+
+
+KEY_OPS = {'push': push, 'lib_save': lib_save, 'lib_board': lib_board}
+
+
+def key_call(op, args):
+    """calls made with the desktop key (POST /api/desktop/do)"""
+    import r2
+    if op in KEY_OPS: return KEY_OPS[op](args or {})
+    if op == 'file_start': return r2.start(args or {})
+    if op == 'file_done': return r2.done(args or {}, origin='desktop')
+    if op == 'file_has': return r2.has((args or {}).get('ids') or [])
+    if op == 'where': return where()
+    raise ValueError('unknown op')
+
+
+def where():
+    """10.52: Settings › Where your data lives — every place Curio keeps something online"""
+    import os, r2
+    db = tdb.remote(); turso = isinstance(db, tdb.Turso)
+    host = re.sub(r'^https?://', '', db.url) if turso else 'this computer (test mode)'
+    out = {'app': {'name': 'Vercel', 'what': 'The app itself (screens, buttons, the server code)', 'where': os.environ.get('VERCEL_URL') or 'curio-web',
+                   'region': os.environ.get('VERCEL_REGION') or 'bom1 (Mumbai)'},
+           'database': {'name': 'Turso', 'what': 'All your data: Tasks / Tracker, Docs, Finance, Calendar, Library list, phone reminders',
+                        'where': host, 'parts': _revs()},
+           'files': {'name': 'Cloudflare R2', 'what': 'Big files: pictures, videos, Notion files, collections sent online',
+                     **{k: v for k, v in r2.status().items() if k in ('on', 'worker', 'worker_ok', 'r2_files', 'r2_bytes', 'db_files', 'db_bytes')}},
+           'clock': {'name': 'Cloudflare Worker (Cron)', 'what': 'Wakes Curio Web every minute for phone reminders'}}
+    try:
+        import push
+        st = push.status(); out['clock'].update({'last_tick': st.get('last_tick'), 'ago': st.get('ago'), 'phones': st.get('phones'), 'kinds': st.get('kinds')})
+    except Exception: pass
+    return out

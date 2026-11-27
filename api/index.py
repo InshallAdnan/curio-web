@@ -59,8 +59,9 @@ def app(env, start):
         # ── public ──
         if path == '/health': return send('200 OK', {'ok': True, 'db': 'turso' if isinstance(tdb.remote(), tdb.Turso) else 'local', 'auth': auth.configured()})
         if path.startswith('/file/'):
-            import pages
-            mime, data = pages.file_get(path[6:])
+            import r2
+            mime, data, rkey = r2.lookup(path[6:])
+            if rkey and r2.on(): return redirect(r2.read_url(rkey), [('Cache-Control', 'private, max-age=3600')])     # 10.52: big files live on R2
             if data is None: return send('404 Not Found', {'error': 'not found'})
             start('200 OK', [('Content-Type', mime), ('Content-Length', str(len(data))), ('Cache-Control', 'private, max-age=31536000, immutable')]); return [bytes(data)]
         if path.startswith('/p/'):
@@ -86,6 +87,18 @@ def app(env, start):
             data = desktop.pull(r.q.get('part', ''))
             start('200 OK', headers + [('Content-Type', 'application/json; charset=utf-8'), ('Content-Encoding', 'gzip'), ('Content-Length', str(len(data)))])
             return [data]
+
+        if path == '/files/key':
+            import r2
+            return send('200 OK', r2.public_jwk())                   # the Worker checks tickets with this (public, not a secret)
+        if path == '/desktop/do':
+            # 10.52: the desktop's live sync and uploads (desktop key)
+            import desktop
+            if not desktop.check(env): return send('401 Unauthorized', {'error': 'This desktop key is not valid any more. Make a new one in Curio Web › Settings › Connect desktop.'})
+            if r.method != 'POST': return send('405 Method Not Allowed', {'error': 'POST only'})
+            b = r.json()
+            try: return send('200 OK', {'ok': True, 'data': desktop.key_call(b.get('op'), b.get('args') or {})})
+            except (ValueError, KeyError, tdb.Conflict) as e: return send('200 OK', {'error': str(e) if not isinstance(e, KeyError) else f'Missing: {e}'})
 
         if path == '/tracker/tick':
             # the free cron service (cron-job.org) calls this every minute: due Tracker reminders → your phone
@@ -156,6 +169,19 @@ def app(env, start):
             b = r.json()
             try: return send('200 OK', {'ok': True, 'data': ai.call(b.get('op'), b.get('args') or {})})
             except (ValueError, KeyError, tdb.Conflict) as e: return send('200 OK', {'error': str(e) if not isinstance(e, KeyError) else f'Missing: {e}'})
+        if path == '/files':
+            import r2, desktop
+            b = r.json(); op = b.get('op'); a = b.get('args') or {}
+            try:
+                if op == 'start': data = r2.start(a)
+                elif op == 'done': data = r2.done(a)
+                elif op == 'status': data = r2.status()
+                elif op == 'set_worker': data = r2.set_worker_url(a.get('url') or '')
+                elif op == 'where': data = desktop.where()
+                elif op == 'tick_url': import push; data = {'url': f"{r.origin}/api/tracker/tick?key={push.tick_key()}"}
+                else: raise ValueError(f'Unknown: {op}')
+                return send('200 OK', {'ok': True, 'data': data})
+            except ValueError as e: return send('200 OK', {'error': str(e)})
         if path == '/desktop':
             import desktop
             b = r.json()

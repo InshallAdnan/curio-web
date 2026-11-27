@@ -77,10 +77,12 @@
     more.replaceChildren(done ? '' : h('button', { class: 'btn', onclick: () => load(false) }, 'Show more'));
   }
 
+  const isMov = (f) => /\.(mp4|mov|webm|m4v|mkv)$/i.test(f || '');      // 10.52: a full video (sent online from the desktop, on R2)
   function tile(it) {
     const m = it.media || [], first = m[0];
     const vid = m.some(x => x.kind === 'video');
-    const img = first ? h('img', { src: fileUrl(first.file), loading: 'lazy', alt: '', style: first.w && first.h ? `aspect-ratio:${first.w}/${first.h}` : null })
+    const img = first ? (isMov(first.file) ? h('video', { src: fileUrl(first.file) + '#t=0.5', muted: true, playsinline: true, preload: 'metadata', style: 'width:100%;display:block' })
+      : h('img', { src: fileUrl(first.file), loading: 'lazy', alt: '', style: first.w && first.h ? `aspect-ratio:${first.w}/${first.h}` : null }))
       : h('div', { class: 'noimg' }, it.title || it.url || 'No picture');
     const p = PL[it.platform] || [it.platform];
     return h('div', { class: 'tile', onclick: () => viewer(it) }, img,
@@ -94,10 +96,11 @@
     const imgBox = h('div', { class: 'vmedia' });
     const show = () => {
       const cur = m[i];
-      imgBox.replaceChildren(...[cur ? h('img', { src: fileUrl(cur.file), alt: '' }) : h('div', { style: 'color:#aaa;padding:40px' }, 'No picture for this save.'),
+      imgBox.replaceChildren(...[cur ? (isMov(cur.file) ? h('video', { src: fileUrl(cur.file), controls: true, playsinline: true, autoplay: true, style: 'max-width:100%;max-height:80vh' })
+        : h('img', { src: fileUrl(cur.file), alt: '' })) : h('div', { style: 'color:#aaa;padding:40px' }, 'No picture for this save.'),
         m.length > 1 ? [h('button', { class: 'nav l', onclick: () => { i = (i - 1 + m.length) % m.length; show(); } }, '‹'), h('button', { class: 'nav r', onclick: () => { i = (i + 1) % m.length; show(); } }, '›'),
           h('span', { class: 'count' }, `${i + 1} / ${m.length}`)] : null,
-        cur && cur.kind === 'video' ? h('span', { class: 'vid' }, '▶ Video — still frame here, the full video is on your PC / original post') : null].flat().filter(Boolean));
+        cur && cur.kind === 'video' && !isMov(cur.file) ? h('span', { class: 'vid' }, '▶ Video — still frame here, the full video is on your PC / original post') : null].flat().filter(Boolean));
     };
     show();
     const note = h('textarea', { placeholder: 'Your note…' }, it.note || '');

@@ -178,15 +178,31 @@
       h('p', { class: 'faint', style: 'margin-top:10px' }, 'Organize (YouTube playlists and Pinterest boards): under development — after API approval.'));
   }
   function storageCard() {
-    const st = h('span', { class: 'pill' }, 'checking…');
-    fetch('/api/health').then(r => r.json()).then(j => { st.textContent = j.db === 'turso' ? 'Connected' : 'Not connected'; st.className = 'pill ' + (j.db === 'turso' ? 'ok' : 'warn'); }).catch(() => {});
-    return h('div', { class: 'card' }, h('div', { class: 'row' }, h('h3', { style: 'margin:0' }, 'Where your data is saved'), st),
-      h('p', { style: 'margin-top:8px' }, 'Everything you do here — Pages (pages, databases, rows, comments, version history, pictures), Finance (accounts, transactions, transfers, goals, subscriptions, assets, settings) and Calendar (which calendars are shown, colours) — is saved the moment you make the change, in your own database:'),
-      h('div', { class: 'links', style: 'margin-top:10px' },
-        h('div', {}, h('b', {}, 'Turso database'), h('span', { class: 'muted' }, ' — SQLite in the cloud, region Mumbai, free plan (5 GB). Connected to your Vercel project “curio-web”.')),
-        h('div', {}, h('b', {}, 'Vercel'), h('span', { class: 'muted' }, ' — runs the app; it keeps no data itself.')),
-        h('div', {}, h('b', {}, 'Google'), h('span', { class: 'muted' }, ' — only checks it is you when you sign in.'))),
-      h('p', { class: 'faint', style: 'margin-top:10px' }, 'Backups: Finance › Settings › Download finance.db (opens in the desktop app) or CSV · Pages › ⋯ › Import & export. The desktop app keeps its own data on your PC, separate from this.'));
+    // 10.52: Where your data lives — every online place, live; the desktop app has the same panel (plus its own PC folders)
+    const box = h('div', { class: 'links', style: 'margin-top:10px' }, h('p', { class: 'muted' }, 'Checking…'));
+    const fx = async (op, args = {}) => (await post('/api/files', { op, args })).data;
+    const mb = (n) => n >= 1e9 ? (n / 1e9).toFixed(2) + ' GB' : (n / 1e6).toFixed(1) + ' MB';
+    const ago = (s) => s == null ? 'never' : s < 90 ? 'just now' : s < 3600 ? Math.round(s / 60) + ' min ago' : Math.round(s / 3600) + ' h ago';
+    const row = (name, okv, what, lines) => h('div', { style: 'padding:10px 0;border-bottom:1px solid var(--line, rgba(127,127,127,.18))' },
+      h('div', { class: 'row', style: 'justify-content:space-between' }, h('b', {}, name), h('span', { class: 'pill ' + (okv === true ? 'ok' : okv === false ? 'warn' : '') }, okv === true ? 'Working' : okv === false ? 'Not set up' : '—')),
+      h('div', { class: 'muted', style: 'margin-top:2px' }, what), ...lines.map(t => h('div', { class: 'faint', style: 'margin-top:2px;word-break:break-all' }, t)));
+    async function draw() {
+      let w;
+      try { w = await fx('where'); } catch (e) { box.replaceChildren(h('p', { style: 'color:var(--expense)' }, e.message)); return; }
+      const f = w.files || {}, c = w.clock || {}, d = w.database || {};
+      const url = h('input', { class: 'inp', type: 'url', placeholder: 'https://curio-files.<you>.workers.dev', value: f.worker || '', style: 'flex:1;min-width:220px' });
+      const save = h('button', { class: 'btn', onclick: async () => { try { await fx('set_worker', { url: url.value }); toast('Saved'); draw(); } catch (e) { toast(e.message); } } }, 'Save');
+      box.replaceChildren(
+        row('App — ' + w.app.name, true, w.app.what, [`Address: ${location.host} · Region: ${w.app.region}`]),
+        row('Database — ' + d.name, d.where && !/this computer/.test(d.where), d.what, [`Where: ${d.where}`, `Change numbers: Finance ${d.parts?.finance ?? 0} · Docs ${d.parts?.pages ?? 0} · Tracker ${d.parts?.tracker ?? 0} — the desktop app checks these and copies changes by itself (both ways)`]),
+        row('Files — ' + f.name, f.on ? !!f.worker_ok : false, f.what,
+            [f.on ? `Worker: ${f.worker}` : 'Not switched on yet: put the Worker address below.', `On R2: ${f.r2_files ?? 0} files · ${mb(f.r2_bytes || 0)}  ·  Older small files in the database: ${f.db_files ?? 0} · ${mb(f.db_bytes || 0)}`]),
+        h('div', { class: 'row', style: 'margin:8px 0 4px;gap:8px' }, url, save),
+        row('Clock — ' + c.name, c.ago != null && c.ago < 300, c.what, [`Last call: ${ago(c.ago)} · Phones getting reminders: ${c.phones ?? 0}${(c.kinds || []).length ? ' (' + c.kinds.join(', ') + ')' : ''}`]),
+        h('p', { class: 'faint', style: 'margin-top:10px' }, 'Google only checks it is you when you sign in. Backups: Finance › Settings › Download finance.db or CSV · Docs › ⋯ › Import & export. Your social media library stays on your PC; a collection you send online from the desktop shows in Moodboard here.'));
+    }
+    draw();
+    return h('div', { class: 'card' }, h('div', { class: 'row' }, h('h3', { style: 'margin:0' }, 'Where your data lives'), h('button', { class: 'btn', onclick: () => draw() }, 'Check again')), box);
   }
   // ── Connect desktop: a read-only key the desktop app uses for "Update from web" ──
   function desktopCard() {
@@ -204,7 +220,7 @@
         fresh.replaceChildren(h('div', { class: 'card', style: 'margin-top:12px;border-color:var(--accent, #f2602d)' },
           h('b', {}, `Key for “${k.name}”`), box,
           h('div', { class: 'row', style: 'margin-top:10px' }, copy, h('button', { class: 'btn', onclick: () => fresh.replaceChildren() }, 'Done')),
-          h('p', { class: 'faint', style: 'margin-top:8px' }, 'Shown only this once. In the desktop app: Settings › Curio Web › paste the key › Save. It can only read your data, never change it.')));
+          h('p', { class: 'faint', style: 'margin-top:8px' }, 'Shown only this once. In the desktop app: Settings › Where your data lives › Online › paste the key › Save.')));
         draw();
       } catch (e) { toast(e.message); }
       make.disabled = false;
@@ -224,7 +240,7 @@
     }
     draw();
     return h('div', { class: 'card' }, h('div', { class: 'row' }, h('h3', { style: 'margin:0' }, 'Connect desktop'), pill),
-      h('p', { style: 'margin-top:8px' }, 'The web is the original. Your desktop app copies Pages, Finance and Calendar from here when you press “Update from web” — it never changes anything here.'),
+      h('p', { style: 'margin-top:8px' }, 'Your desktop app and this website use the same data. With a desktop key the desktop copies every change from here by itself, and sends its own changes here — no button.'),
       h('div', { class: 'row', style: 'margin-top:12px;gap:8px' }, name, make), fresh, list);
   }
   function themeCard() {
