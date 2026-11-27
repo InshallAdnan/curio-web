@@ -598,8 +598,9 @@
       h('div', { class: 'card' }, h('h3', {}, 'Reminders on this phone'), st, h('div', { class: 'row', style: { marginTop: '10px', flexWrap: 'wrap' } }, on, test),
       h('p', { class: 'faint' }, 'First add Curio to your home screen (browser menu › Add to Home screen) and open it from there.')),
       h('div', { class: 'card' }, h('h3', {}, 'The every-minute check (one time setup)'),
-        h('p', { class: 'muted' }, 'Reminders go out when this address is opened. A free service opens it every minute for you:'), url,
-        h('ol', { class: 'muted' }, h('li', {}, 'Open cron-job.org → Sign up (free) → Create cronjob.'), h('li', {}, 'Title: Curio. URL: paste the address above.'), h('li', {}, 'Execution schedule: Every 1 minute → Create.')),
+        h('p', { class: 'muted' }, 'Reminders go out when this address is opened. Your Cloudflare Worker “curio-files” opens it every minute:'), url,
+        h('ol', { class: 'muted' }, h('li', {}, 'Copy the address above.'), h('li', {}, 'Cloudflare › Workers & Pages › curio-files › Settings › Variables and secrets › + Add variable.'),
+          h('li', {}, 'Key: TICK_URL · Value: paste the address · tick “Secret” → Add variable and deploy.'), h('li', {}, 'Within a minute this page says ✓ Working. (An older cron-job.org job can then be paused.)')),
         h('p', { class: 'faint' }, 'Keep this address private — it only lets someone trigger your reminders, nothing else.')));
   };
 
