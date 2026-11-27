@@ -240,7 +240,7 @@ def build(payload):
     stamp = datetime.now().strftime('%d %b %Y, %H:%M')
 
     def go():
-        root = PG.create(payload.get('parent') or None, f'Notion import — {stamp}', None, '📥')
+        root = PG.create(payload.get('parent') or None, (payload.get('title') or '').strip()[:120] or f'Notion import — {stamp}', None, payload.get('icon') or '📥')
         # databases: one per Notion table (the "_all" file has every column)
         dbfiles = {}
         for n in csvs:
@@ -250,8 +250,9 @@ def build(payload):
         db_ids = {key: None for key in dbfiles}
         # which page is a row of which database: same title (+ same created date when there is one)
         by_title = {}
-        for n, md in pages.items():
-            by_title.setdefault(base(n)[0].strip().lower(), []).append(n.split('/')[-1])
+        for n, md in pages.items():                                   # 10.53: the page's own title (# …) — file names lose "/" and such
+            h1 = next((l[2:].strip() for l in md.splitlines()[:3] if l.startswith('# ')), '') or base(n)[0]
+            for t in {h1.strip().lower(), base(n)[0].strip().lower()}: by_title.setdefault(t, []).append(n.split('/')[-1])
         rows_of, taken = {}, set()
         dbs = {}
         for key, n in dbfiles.items():
@@ -312,6 +313,10 @@ def build(payload):
             for ref in [x for x in re.findall(r'\]\(' + PAR + r'\)', md) if x.lower().endswith('.csv')]:
                 key = re.sub(r'(_all)?\.csv$', '', unquote(ref).split('/')[-1], flags=re.I)
                 if key in db_ids and key not in db_parent: db_parent[key] = n.split('/')[-1]
+        def empty(me):                                                # 10.53: an empty "Untitled" page (Notion templates, blank rows' leftovers) is left out
+            md = pages[full[me]]; _, k = prop_lines(md)
+            body = [l for l in md.splitlines()[1:] if l.strip()][k:]
+            return not body and (base(me)[0] or 'Untitled').strip().lower() == 'untitled'
         order, seen = [], set()
         def visit(p):
             if p in seen: return
@@ -320,7 +325,7 @@ def build(payload):
             order.append(p)
         for n in pages:
             me = n.split('/')[-1]
-            if me not in rowpages: visit(me)
+            if me not in rowpages and not (empty(me) and me not in parent_of.values()): visit(me)
         npages = 0
         for me in order:
             md = pages[full[me]]; title = base(me)[0] or 'Untitled'
