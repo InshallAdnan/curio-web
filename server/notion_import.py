@@ -48,7 +48,13 @@ def parse_date(s):
 
 
 def _epoch(d):
-    try: return datetime.strptime(d['start'][:16], '%Y-%m-%dT%H:%M').timestamp() if 'T' in d['start'] else datetime.strptime(d['start'][:10], '%Y-%m-%d').timestamp()
+    """Notion writes times in your own time zone (Karachi): read them so, whatever the server's clock zone is"""
+    import os
+    from zoneinfo import ZoneInfo
+    tz = ZoneInfo(os.environ.get('CURIO_TZ', 'Asia/Karachi'))
+    try:
+        dt = datetime.strptime(d['start'][:16], '%Y-%m-%dT%H:%M') if 'T' in d['start'] else datetime.strptime(d['start'][:10], '%Y-%m-%d')
+        return dt.replace(tzinfo=tz).timestamp()
     except Exception: return None
 
 
@@ -150,8 +156,10 @@ def md_blocks(md, ctx, skip_title=True, skip_props=0):
             elif n in ctx.page_ids:
                 add({'type': 'pageLink', 'props': {'docId': ctx.page_ids[n]}}, 0); ctx.used_pages.add(n); i += 1; continue
             else:
-                url, nm = ctx.file(m.group(2))
-                if url: add({'type': 'file', 'props': {'url': url, 'name': nm}}, 0); i += 1; continue
+                url, nm = ctx.file(m.group(2)); low = nm.lower()
+                if url:
+                    kind = 'video' if low.endswith(VIDEO) else 'audio' if low.endswith(AUDIO) else 'image' if low.endswith(('.png', '.jpg', '.jpeg', '.gif', '.webp')) else 'file'
+                    add({'type': kind, 'props': {'url': url, 'name': nm, **({'caption': ''} if kind != 'file' else {})}}, 0); i += 1; continue
         m = re.match(r'^[-*+]\s+\[([ xX])\]\s+(.*)$', s)
         if m: flush(); add({'type': 'checkListItem', 'props': {'checked': m.group(1).lower() == 'x'}, 'content': inline(m.group(2), ctx.page_link)}, indent); i += 1; continue
         m = re.match(r'^[-*+]\s+(.*)$', s)
@@ -325,7 +333,7 @@ def build(payload):
             order.append(p)
         for n in pages:
             me = n.split('/')[-1]
-            if me not in rowpages and not (empty(me) and me not in parent_of.values()): visit(me)
+            if me not in rowpages: visit(me)
         npages = 0
         for me in order:
             md = pages[full[me]]; title = base(me)[0] or 'Untitled'

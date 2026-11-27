@@ -142,7 +142,7 @@ def row_update(i, payload):
         if 'props' in payload:
             props = json.loads(r['props'] or '{}'); props.update(payload['props'] or {})
             sets.append('props=?'); vals.append(json.dumps(props))
-        for k, col in (('title', 'title'), ('icon', 'icon'), ('coverImage', 'cover'), ('sort', 'sort')):
+        for k, col in (('title', 'title'), ('icon', 'icon'), ('coverImage', 'cover'), ('sort', 'sort'), ('created', 'created')):   # created: imports keep the original date
             if k in payload: sets.append(f'{col}=?'); vals.append(payload[k])
         if sets: c.execute(f'UPDATE docs SET {", ".join(sets)}, updated=? WHERE id=?', (*vals, time.time(), i))
 
