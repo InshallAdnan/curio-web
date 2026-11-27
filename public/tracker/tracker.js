@@ -440,8 +440,9 @@
     const board = h('div', { class: 'masonry' }, ...notes.map(n => h('div', { class: 'note', style: { background: n.color || NOTE[n.id % NOTE.length] }, onclick: () => noteForm(n) },
       n.title ? h('b', {}, n.title) : null, n.text ? h('i', {}, n.text) : null,
       h('div', { class: 'nmeta' }, [IN.sec ? '' : n.section, dt(n.created)].filter(Boolean).join(' · '), n.page_id ? h('span', { class: 'pill', style: { '--c': 'var(--accent)' } }, 'Page') : null))));
-    p.replaceChildren(h('div', { class: 'faint', style: { marginBottom: '8px' } }, 'Pictures and videos of your board stay on the PC; here you have your goals, dreams and note cards.'),
-      h('div', { class: 'ins' }, h('div', {}, gcard, dcard), sparkCard(d.spark)), bar, notes.length ? board : h('div', { class: 'card empty' }, 'No note cards here yet.'));
+    p.replaceChildren(h('div', { class: 'faint', style: { marginBottom: '8px' } }, 'Pictures and videos of your Vision Board stay on the PC; here you have your goals, dreams and note cards.'),
+      h('div', { class: 'ins' }, h('div', {}, gcard, dcard), sparkCard(d.spark)),
+      h('h2', { style: { margin: '18px 0 2px' } }, 'Vision Board'), h('div', { class: 'faint' }, 'Pictures, videos, lines and quotes that keep you going — in your own sections.'), bar, notes.length ? board : h('div', { class: 'card empty' }, 'No note cards here yet.'));
   };
   function sparkCard(s) {
     const it = s.item; const left = s.left;
@@ -532,11 +533,13 @@
       ...d.palette.map(([nm, c]) => h('button', { class: color === c ? 'on' : '', title: nm, style: { background: c }, onclick: (e) => { color = c; mark(e); } })));
     function mark(e) { sw.querySelectorAll('button').forEach(z => z.classList.toggle('on', z === e.currentTarget)); }
     const pin = h('input', { type: 'checkbox', checked: !!n.pinned }), res = h('input', { type: 'checkbox', checked: n.resurface !== 0 });
-    sheet('Note', h('div', {}, field('Title', t), field('Note', x), field('Category', tg), field('Colour', sw),
+    const when = inp((n.created || iso(new Date())).slice(0, 10), '', 'date');          // 10.53: the note's own date
+    const created = () => (n.created && n.created.slice(0, 10) === when.value) ? n.created : (when.value ? when.value + 'T12:00:00' : undefined);
+    sheet('Note', h('div', {}, field('Title', t), field('Note', x), field('Date', when), field('Category', tg), field('Colour', sw),
       h('label', { class: 'item' }, pin, h('span', {}, 'Pin to the top')), h('label', { class: 'item' }, res, h('span', {}, 'Bring it back to me as a “Memory of the day”'))),
       [['Delete', 'danger', () => confirm('Delete this note for good?') ? act('notes_delete', { id: n.id }, 'Deleted') : false],
        ['Archive', 'soft', () => act('notes_archive', { id: n.id }, 'Archived')],
-       ['Save', 'primary', () => act('notes_save', { note: { id: n.id, title: t.value, content: x.value, tags, color, pinned: pin.checked ? 1 : 0, resurface: res.checked ? 1 : 0 } }, 'Saved')]]);
+       ['Save', 'primary', () => act('notes_save', { note: { id: n.id, title: t.value, content: x.value, tags, color, pinned: pin.checked ? 1 : 0, resurface: res.checked ? 1 : 0, created: created() } }, 'Saved')]]);
   }
   function tagMenu(t, palette) {
     const nm = inp(t.name, 'Name'); let color = t.color;

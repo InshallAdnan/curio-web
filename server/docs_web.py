@@ -30,12 +30,12 @@ def _day(ts): return {'start': ts[:10]} if ts else None
 
 
 EXTRA = {'top': 'curio_db_page', 'gpage': 'inspo_goals_page', 'cpage': 'inspo_cards_page'}
-INTRO = 'Made by Tracker › Inspo. Goals come from the Tracker by themselves; a card is added to Inspo cards when you press “Convert into page”.'
+INTRO = 'Made by Tracker › Inspo. Goals come from the Tracker by themselves; a card is added to the Vision Board when you press “Convert into page”.'
 
 
 def _ids(c):
     d = dict(root=M.setting(c, 'inspo_page_root') or '', cdb=M.setting(c, 'inspo_cards_db') or '', gdb=M.setting(c, 'inspo_goals_db') or '')
-    d.update({k: M.setting(c, v) or '' for k, v in EXTRA.items()}); return d
+    d.update({k: M.setting(c, v) or '' for k, v in EXTRA.items()}); d['v'] = M.setting(c, 'inspo_docs_v') or ''; return d
 
 
 def _blocks(doc):
@@ -58,12 +58,14 @@ def _ensure(st):
     top = page('top', None, 'Curio Database', '🗂️')
     root = page('root', top, 'Inspo', '✨')
     gpage = page('gpage', root, 'Goals', '🎯')
-    cpage = page('cpage', root, 'Inspo cards', '🖼️')
+    cpage = page('cpage', root, 'Vision Board', '🖼️')
+    if (PG.get_doc(cpage) or {}).get('title') == 'Inspo cards': PG.update(cpage, {'title': 'Vision Board'})      # 10.53: its name
     have = {d['id']: d for d in PG.db_list()}
-    cdb = st['cdb'] if st['cdb'] in have else PG.db_create(cpage, {'title': 'Inspo cards', 'icon': '🖼️', 'props': CARD_PROPS, 'views': [
+    cdb = st['cdb'] if st['cdb'] in have else PG.db_create(cpage, {'title': 'Vision Board', 'icon': '🖼️', 'props': CARD_PROPS, 'views': [
         {'id': _u(), 'name': 'Gallery', 'type': 'gallery', 'cardSize': 'm'}, {'id': _u(), 'name': 'Table', 'type': 'table', 'sorts': [{'prop': 'added', 'dir': 'desc'}]}]})['id']
     gdb = st['gdb'] if st['gdb'] in have else PG.db_create(gpage, {'title': 'Goals', 'icon': '🎯', 'props': GOAL_PROPS, 'views': [
         {'id': _u(), 'name': 'Table', 'type': 'table', 'sorts': [{'prop': 'added', 'dir': 'desc'}]}, {'id': _u(), 'name': 'Gallery', 'type': 'gallery', 'cardSize': 'm'}]})['id']
+    if ((PG.db_get(cdb) or {}).get('db') or {}).get('title') == 'Inspo cards': PG.db_update(cdb, {'title': 'Vision Board'})
     for dbid, pg in ((cdb, cpage), (gdb, gpage)):
         if (PG.db_get(dbid) or {}).get('db', {}).get('parent') != pg: PG.db_update(dbid, {'parent': pg})
         cur = _blocks(PG.get_doc(pg))
@@ -79,7 +81,7 @@ def _ensure(st):
     if keep != cur: PG.update(root, {'content': json.dumps(keep)})
     cur = _blocks(PG.get_doc(top))
     if not _has(cur, 'pageLink', 'docId', root):
-        head = [] if cur else [{'type': 'paragraph', 'content': 'Everything Curio keeps for you, one page each: Inspo (Goals, Inspo cards) — more parts come here later.'}]
+        head = [] if cur else [{'type': 'paragraph', 'content': 'Everything Curio keeps for you, one page each: Inspo (Goals, Vision Board) — more parts come here later.'}]
         PG.update(top, {'content': json.dumps(head + cur + [{'type': 'pageLink', 'props': {'docId': root}}, {'type': 'paragraph'}])})
     return root, cdb, gdb
 
@@ -95,7 +97,7 @@ def _sig(gs): return json.dumps([(g['id'], g['kind'], g['title'], g['why'], g.ge
 
 def goal_pages(force=False):
     st = tracker.run(lambda c: dict(gs=M.goals(c, 'goal') + M.goals(c, 'dream'), sig=M.setting(c, 'goal_pages_sig'), **_ids(c)))
-    if not force and st['sig'] == _sig(st['gs']) and st.get('top'): return           # 10.51: once more to give Inspo its own pages
+    if not force and st['sig'] == _sig(st['gs']) and st.get('top') and st.get('v') == '2': return           # 10.51: once more to give Inspo its own pages
 
     def go():
         root, cdb, gdb = _ensure(st); rows = {r['id']: r for r in PG.db_get(gdb)['rows']}; got = {}
@@ -114,7 +116,7 @@ def goal_pages(force=False):
     def back(c):
         _save_ids(c, res['root'], res['cdb'], res['gdb'], res['ex'])
         for gid, pid in res['got'].items(): c.execute('UPDATE goals SET page_id=? WHERE id=?', (pid, gid))
-        c.commit(); M.set_setting(c, 'goal_pages_sig', _sig(M.goals(c, 'goal') + M.goals(c, 'dream')))
+        c.commit(); M.set_setting(c, 'goal_pages_sig', _sig(M.goals(c, 'goal') + M.goals(c, 'dream'))); M.set_setting(c, 'inspo_docs_v', '2')
     tracker.run(back)
 
 

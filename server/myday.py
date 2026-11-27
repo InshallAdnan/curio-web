@@ -733,6 +733,11 @@ def save_note(c, n):
     if n.get('id'): c.execute('UPDATE notes SET title=?, content=?, tags=?, pinned=?, resurface=? WHERE id=?', vals + (n['id'],)); nid = n['id']
     else: nid = c.execute('INSERT INTO notes(title, content, tags, pinned, resurface, created) VALUES(?,?,?,?,?,?)', vals + (stamp(),)).lastrowid
     if 'color' in n: c.execute('UPDATE notes SET color=? WHERE id=?', (n.get('color') or '', nid))
+    if n.get('created'):                                          # 10.53: a note can keep its own date (e.g. from Notion), not today
+        cr = str(n['created']).replace('Z', '').replace(' ', 'T')[:19]
+        if len(cr) == 10: cr += 'T12:00:00'
+        c.execute('UPDATE notes SET created=? WHERE id=?', (cr, nid))
+    if 'archived' in n: c.execute('UPDATE notes SET archived=? WHERE id=?', (1 if n.get('archived') else 0, nid))
     c.commit(); return nid
 
 
