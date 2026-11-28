@@ -190,7 +190,55 @@ def lib_board(a):
     return {'id': bid}
 
 
-KEY_OPS = {'push': push, 'lib_save': lib_save, 'lib_board': lib_board}
+# ───────────────────────── 10.55: the Tracker's screen record and coach chat from every PC ─────────────────────────
+# Each PC writes these all the time (a sample every few seconds), so they do not go through the change replay above
+# (row numbers would clash between two PCs). Each PC sends its own finished rows in small batches (about once a minute),
+# keyed by PC + its own key (the start time of a span / the time of a chat line); the other PCs take what is new since
+# they last asked. One small table, nothing else changes.
+LOG_TABLES = ('activity', 'ai_chat')
+_log_ready = False
+
+
+def _log_db():
+    global _log_ready
+    r = tdb.remote()
+    if not _log_ready:
+        r.run([('CREATE TABLE IF NOT EXISTS side_log (tbl TEXT NOT NULL, dev TEXT NOT NULL, k TEXT NOT NULL, data TEXT, upd INTEGER NOT NULL, '
+                'del INTEGER DEFAULT 0, PRIMARY KEY (tbl, dev, k))', ()),
+               ('CREATE INDEX IF NOT EXISTS side_log_upd ON side_log (upd)', ())])
+        _log_ready = True
+    return r
+
+
+def log_push(a):
+    """{dev, rows:[{tbl, k, data:{…}, del}]} → kept (newest wins)"""
+    dev = str(a.get('dev') or '')[:80]
+    if not dev: raise ValueError('dev')
+    rows = a.get('rows') or []
+    if len(rows) > 1000: raise ValueError('too many rows in one go')
+    now = int(time.time() * 1000); stmts = []
+    for i, x in enumerate(rows):
+        tbl = str(x.get('tbl') or '')
+        if tbl not in LOG_TABLES: continue
+        k = str(x.get('k') or '')[:120]
+        if not k: continue
+        data = json.dumps(x.get('data') or {}, ensure_ascii=False)[:20000]
+        stmts.append(('INSERT INTO side_log (tbl, dev, k, data, upd, del) VALUES (?,?,?,?,?,?) '
+                      'ON CONFLICT (tbl, dev, k) DO UPDATE SET data=excluded.data, upd=excluded.upd, del=excluded.del',
+                      (tbl, dev, k, data, now + i, 1 if x.get('del') else 0)))
+    if stmts: _log_db().run(stmts, transaction=True)
+    return {'n': len(stmts), 'upd': now + len(stmts)}
+
+
+def log_pull(a):
+    """{dev, since} → what the OTHER PCs sent after `since` (oldest first, at most 2000 at a time)"""
+    dev = str(a.get('dev') or ''); since = int(a.get('since') or 0)
+    res = _log_db().run([('SELECT tbl, dev, k, data, upd, del FROM side_log WHERE upd > ? AND dev <> ? ORDER BY upd LIMIT 2000', (since, dev))])[0].rows
+    out = [{'tbl': t, 'dev': d, 'k': k, 'data': json.loads(x or '{}'), 'upd': u, 'del': bool(dl)} for t, d, k, x, u, dl in res]
+    return {'rows': out, 'more': len(out) >= 2000}
+
+
+KEY_OPS = {'push': push, 'lib_save': lib_save, 'lib_board': lib_board, 'log_push': log_push, 'log_pull': log_pull}
 
 
 def key_call(op, args):
