@@ -151,3 +151,40 @@ def status():
             with urllib.request.urlopen(urllib.request.Request(worker_url() + '/health', headers={'User-Agent': 'Curio-Web/1.0'}), timeout=8) as r: out['worker_ok'] = json.loads(r.read()).get('ok') is True
         except Exception as e: out['worker_ok'] = False; out['worker_err'] = str(e)[:120]
     return out
+
+
+# ───────────────────────── a file from a link (Notion import without downloading anything yourself) ─────────────────────────
+FROM_HOSTS = ('file.notion.com', 'file.notion.so', 'prod-files-secure.s3.us-west-2.amazonaws.com', 's3.us-west-2.amazonaws.com',
+              's3-us-west-2.amazonaws.com', 'secure.notion-static.com')
+
+
+def from_url(a):
+    """{url, name} → this server fetches the file (only from Notion's own file hosts) and puts it on R2. → {id, url, size}"""
+    try: return _from_url(a)
+    except ValueError: raise
+    except Exception as e: raise ValueError(f'Could not copy the file: {str(e)[:200]}')
+
+
+def _from_url(a):
+    import urllib.request
+    from urllib.parse import urlparse, unquote
+    url = str(a.get('url') or '')
+    host = (urlparse(url).hostname or '').lower()
+    if urlparse(url).scheme != 'https' or not any(host == h or host.endswith('.' + h) for h in FROM_HOSTS):
+        raise ValueError('Only Notion file links can be copied this way.')
+    if not on(): raise ValueError('Cloud files are not switched on yet (Settings › Where your data lives).')
+    req = urllib.request.Request(url, headers={'User-Agent': 'Curio-Web/1.0'})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        mime = (r.headers.get('Content-Type') or '').split(';')[0].strip()
+        data = r.read(SINGLE + 1)
+    if len(data) > SINGLE: raise ValueError('That file is too big to copy from a link (over 90 MB).')
+    if not data: raise ValueError('That file is empty.')
+    name = str(a.get('name') or '') or unquote(urlparse(url).path.rsplit('/', 1)[-1]) or 'file'
+    if not mime or mime == 'application/octet-stream' or mime.startswith('binary/'): mime = mimetypes.guess_type(name)[0] or 'application/octet-stream'
+    st = start({'name': name, 'size': len(data), 'mime': mime})
+    put = urllib.request.Request(st['put'], data=data, method='PUT', headers={'Content-Type': st['mime'], 'User-Agent': 'Curio-Web/1.0'})
+    with urllib.request.urlopen(put, timeout=90) as r:
+        if r.status >= 300: raise ValueError(f'R2 said {r.status}')
+    out = done({'id': st['id'], 'name': name, 'mime': st['mime'], 'size': len(data)}, origin='notion')
+    out['size'] = len(data); out['mime'] = st['mime']
+    return out

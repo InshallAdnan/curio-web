@@ -178,6 +178,7 @@ def app(env, start):
                 elif op == 'status': data = r2.status()
                 elif op == 'set_worker': data = r2.set_worker_url(a.get('url') or '')
                 elif op == 'where': data = desktop.where()
+                elif op == 'from_url': data = r2.from_url(a)                  # Notion import: the server copies the file
                 elif op == 'tick_url': import push; data = {'url': f"{r.origin}/api/tracker/tick?key={push.tick_key()}"}
                 else: raise ValueError(f'Unknown: {op}')
                 return send('200 OK', {'ok': True, 'data': data})
